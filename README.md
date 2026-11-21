@@ -7,7 +7,7 @@ workflows where enrichment is interrupted: the card stays without scene
 audio, picture, timestamped source, or the full scene sentence, and fixing
 each one by hand costs minutes per card.
 
-**Status: v0.3.0 — working add-on, preview-first.** The matching core, the in-Anki
+**Status: v0.3.1 — working add-on, preview-first.** The matching core, the in-Anki
 preview/apply dialog (with undo), offline morphological bolding via MeCab, badge
 explanations with tooltips and a filter bar, and the headless audit-package
 builder are complete and tested. Vocabulary-specific heuristics are tuned for the

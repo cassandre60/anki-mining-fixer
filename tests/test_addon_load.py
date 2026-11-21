@@ -106,7 +106,7 @@ def test_menu_registration_is_idempotent(loaded_addon):
 
 
 def test_entry_point_reports_the_packaged_version(loaded_addon):
-    assert loaded_addon.addon_version() == "0.3.0"
+    assert loaded_addon.addon_version() == "0.3.1"
 
 
 def test_entry_point_survives_a_missing_main_window(monkeypatch):

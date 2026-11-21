@@ -1,6 +1,6 @@
 [project]
 name = "anki-mining-fixer"
-version = "0.3.0"
+version = "0.3.1"
 description = "Anki add-on: backfills mining cards from their enriched scene siblings"
 requires-python = ">=3.13"
 license = "AGPL-3.0-or-later"

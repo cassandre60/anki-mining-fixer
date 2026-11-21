@@ -1,8 +1,8 @@
 # Mining Fixer release — builds and publishes a .ankiaddon on tag push.
 #
 # Usage:
-#   git tag -a v0.3.0 -m "Release v0.3.0"
-#   git push origin v0.3.0
+#   git tag -a v0.3.1 -m "Release v0.3.1"
+#   git push origin v0.3.1
 #
 # The workflow runs the full test gate first, then builds the archive
 # and creates a GitHub Release with the .ankiaddon attached.

@@ -96,6 +96,11 @@ gh run watch "$RUN_ID" --exit-status
 ### Workstream 8: MeCab Word-vs-Clause Oracle — tried and reverted (2026-11-21)
 - A token-count oracle was built and wired into the bold tiers, then reverted the same day: on the real deck it refused legitimate compound verbs and dictionary expressions (響き渡る, いろいろあって, 諦めてなかった) while every full-sentence Expression was a listening placeholder. The punctuation/ending/length gate is restored; the evidence is in `IMPLEMENTATION_PLAN.md` B8/T23 and B11.
 
+### Workstream 9: Release v0.3.1 (2026-11-22)
+- Version bumped to `0.3.1` in `manifest.json` and `pyproject.toml`; the dev-install `meta.json` is updated locally (gitignored).
+- Ships the skipped-expansion fix (T29), the independent audit referee and partial-apply invariant (T30), the T24–T28 runtime fixes, and the planning performance work. Local `main` was reconciled with `origin/main` and pushed.
+- Full gate: 312 passed locally, 310 passed + 2 skipped on CI, ruff/format/pyright clean.
+
 ---
 
 ## 3. Current Backlog

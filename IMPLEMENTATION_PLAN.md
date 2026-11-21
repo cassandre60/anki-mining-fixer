@@ -1,6 +1,6 @@
 # Mining Fixer — Implementation Plan
 
-Status: **shipped as v0.3.0** — the add-on installs, previews, applies and
+Status: **shipped as v0.3.1** — the add-on installs, previews, applies and
 undoes; the audit builder works headless. New work enters through the Backlog
 below, never as silent scope creep inside a coding session.
 
