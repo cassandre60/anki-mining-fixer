@@ -149,7 +149,16 @@ first, with the reason.
   dimension until 2026-11-17). If a sentence completion shipped expecting a
   rebuilt ruby (`ruby-will-be-regenerated`) and the engine produced nothing,
   the completion is demoted (`stale-fragment-furigana-risk`) rather than
-  leaving the old ruby under the new text. By owner decision (2026-11-16) it
+  leaving the old ruby under the new text.
+  **Protection for user-authored ruby context (owner report 2026-11-21):**
+  On unedited sentences (`pending is None`), a non-empty `Sentence (furigana)`
+  is never overwritten as stale when it carries user-authored context —
+  speaker tags on the back omitted from the front (`ruby_speaker and not sent_speaker`,
+  e.g. `（炭治郎）`) or enclosing context (`norm_sentence_match(sentence) in norm_sentence_match(base)`).
+  The user intentionally omits speaker tags from the front so as not to
+  reveal the answer, while keeping them on the back for character voice;
+  blind regeneration must never clobber that hand-crafted context.
+  By owner decision (2026-11-16) it
   runs by default (`batch_regenerate_furigana: true`); the config key remains
   the escape hatch, and every guard above still applies.
 - **Q-D12 — Expression repair is self-oracled, completion and lemma normalization,

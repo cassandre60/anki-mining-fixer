@@ -125,6 +125,7 @@ below, never as silent scope creep inside a coding session.
 | T24 | `test_normalize.py` (`test_repair_strips_nbsp_entities_and_unicode_nbsp`), `test_plan.py` (`test_a_stray_nbsp_is_stripped_from_the_sentence`, `test_strip_nbsp_is_on_by_default_in_the_shipped_config`); `config.json` shipped default |
 | T25 | `test_plan.py` (`test_empty_reading_filled_from_own_furigana`), `test_report_summary.py` (`reading-derived-from-furigana` badge coverage) |
 | T26 | `test_plan.py` (`test_bold_repair_skips_the_shell_only_definition_listening_shape`); closes B11 |
+| T27 | `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`); QUALITY Q-D11 user-context protection |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -324,6 +325,17 @@ below, never as silent scope creep inside a coding session.
   (`is_empty(v) or is_empty_glossary_shell(v)`) on both definition fields.
   Resolves the 216 misclassified cards in the configured deck; pinned in
   `test_plan.py`.
+- **T27 — Protection for user-authored ruby context (owner report 2026-11-21).**
+  The deck census revealed 2,847 cards where the author deliberately added speaker
+  tags (e.g. `（炭治郎）`) or hints on the back (`Sentence (furigana)`) that are
+  omitted from `Sentence` on the front so as not to reveal the answer.
+  Line 1097 previously treated any base mismatch on unedited sentences as "stale"
+  and generated a replacement, which would have destroyed all 2,847 hand-crafted
+  cards on an 18,000-card batch run. Added user-context guard to `plan._furigana_write`:
+  on unedited sentences (`pending is None`), if `Sentence (furigana)` contains
+  speaker tags omitted from the front (`ruby_speaker and not sent_speaker`) or
+  encloses the front sentence, the field is protected and never overwritten.
+  Pinned in `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`).
 - **B9 — Dictionary spelling for kana expressions** (owner ask 2026-11-16;
   text in [`FUTURE_FEATURES.md`](FUTURE_FEATURES.md) §F2, design in
   [`BULK_FIX.md`](BULK_FIX.md) dimension 4 / slice 4). Rewrite a kana-only

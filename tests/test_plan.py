@@ -1575,6 +1575,30 @@ def test_regeneration_is_a_noop_when_the_ruby_already_matches():
     assert not any("furigana" in warning for warning in plan.warnings)
 
 
+def test_regeneration_protects_user_authored_ruby_context():
+    # Owner report 2026-11-21: the author deliberately adds speaker tags or hints
+    # to Sentence (furigana) on the back (e.g. （炭治郎）) that are omitted from
+    # Sentence on the front so as not to reveal the answer. Blind regeneration
+    # must NOT overwrite user context on unedited sentences.
+    target = _regen_card(
+        1,
+        "正月になったらみんなに腹いっぱい食べさせてやりたいし",
+        furigana=(
+            "（ 炭[たん] 治郎[じろう]） "
+            "正月[しょうがつ]になったらみんなに 腹[はら]いっぱい 食[た]べさせてやりたいし"
+        ),
+    )
+    plan = build_plan(
+        [target],
+        REGEN_CFG,
+        scope_note_ids=[1],
+        furigana_generator=_generator(
+            "正月[しょうがつ]になったらみんなに腹[はら]いっぱい食[た]べさせてやりたいし"
+        ),
+    )
+    assert not any(w.op == OP_REGENERATE_FURIGANA for w in plan.writes)
+
+
 def test_regeneration_warns_once_when_no_generator_is_available():
     plan = build_plan(
         [_regen_card(1, "見出しはこうニャ！"), _regen_card(2, "見出しはこうニャ！")],

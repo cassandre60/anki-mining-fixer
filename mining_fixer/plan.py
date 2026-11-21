@@ -1094,6 +1094,19 @@ def _furigana_write_for(
     # A ruby that no longer describes its sentence (the mining junk
     # この‐たび【…】, or a block copied earlier) is stale: regenerate it in
     # place rather than leaving the mismatch (author report on 此の度).
+    # Guard (owner report 2026-11-21): never overwrite user-authored ruby context
+    # (speaker tags like （炭治郎）, hints, or asides) on existing unedited sentences.
+    if bool(current.strip()) and pending is None:
+        base = furigana_base(current)
+        ruby_speaker = bool(re.search(r"[（(][^()（）\n]{1,16}[)）]", base))
+        sent_speaker = bool(re.search(r"[（(][^()（）\n]{1,16}[)）]", sentence))
+        norm_sent = norm_sentence_match(sentence)
+        norm_base = norm_sentence_match(base)
+        if (ruby_speaker and not sent_speaker) or (
+            len(norm_base) > len(norm_sent) and norm_sent in norm_base
+        ):
+            return None, None, None
+
     stale = bool(current.strip()) and not furigana_base_matches(current, sentence)
     if generated == current and not stale:
         return None, None, None
