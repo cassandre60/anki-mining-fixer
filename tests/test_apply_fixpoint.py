@@ -138,3 +138,52 @@ def test_fixpoint_populates_merged_log_path_and_respects_excluded_keys(controlle
     assert seen_rows[0] == [row_a]
     assert result.log_path == p2
     assert not p1.exists()
+
+
+def test_take_backup_is_noop_and_never_calls_create_backup(controller):
+    ci = controller
+    called = []
+    fake_col = types.SimpleNamespace(
+        create_backup=lambda **kwargs: called.append(kwargs),
+    )
+    res, err = ci._take_backup(fake_col)
+    assert res is False
+    assert err is None
+    assert called == []  # Synchronous collection backup must never be called
+
+
+def test_fixpoint_reuses_in_memory_records_on_subsequent_passes(controller):
+    ci = controller
+    calls = []
+
+    def plan_preview(col, cfg, scope_note_ids=None, records=None):
+        calls.append(records)
+        return types.SimpleNamespace(plan=object(), error=None, records_by_id={1: object()})
+
+    ci.plan_preview = plan_preview
+    ci.select = lambda plan, ops: types.SimpleNamespace(rows=[1])
+    decisions = [_Decision(0)]
+    ci.build_batch_decision = lambda col, plan, rows, cfg: decisions.pop(0)
+    ci.apply_batch = lambda col, decision, meta, *, take_backup=False: ci.BatchResult(
+        writes=decision.row_count(), modified=1
+    )
+
+    initial = {1: types.SimpleNamespace(note_id=1)}
+    decision = types.SimpleNamespace(
+        row_count=lambda: 1,
+        touched_notes=[1],
+        skipped=[],
+    )
+    res = ci.apply_plan_to_fixpoint(
+        None,
+        {},
+        [1],
+        {},
+        first_decision=decision,
+        take_backup=False,
+        initial_records=initial,
+    )
+    assert res.writes == 1
+    # Pass 1 must receive the updated in-memory records, avoiding full-deck reloads
+    assert len(calls) == 1
+    assert calls[0] is not None

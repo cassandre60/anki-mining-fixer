@@ -7,7 +7,7 @@ from pathlib import Path
 
 from test_golden_scene import CFG, CHILD, CHILD_ID, PARENT, PARENT_ID
 
-from mining_fixer.matching import NoteRecord
+from mining_fixer.matching import NoteRecord, SceneParentIndex
 from mining_fixer.normalize import MorphToken, furigana_base_matches, strip_renderable
 from mining_fixer.plan import (
     FURIGANA_FIELD,
@@ -1434,6 +1434,62 @@ def test_empty_reading_filled_from_own_furigana():
     assert write.new_value == "くち"
     assert write.badges == ("reading-derived-from-furigana",)
     assert write.default_checked is True
+
+
+def test_scoped_plan_parent_windowing_matches_scene_without_indexing_entire_deck(
+    monkeypatch,
+):
+    # Performance invariant (Q-P1): When planning a scoped selection,
+    # SceneParentIndex.from_parents must only index candidate parents within
+    # window_ms rather than indexing the entire historical deck.
+    indexed_parents: list[list[int]] = []
+    orig_from_parents = SceneParentIndex.from_parents
+
+    def tracked_from_parents(parents_by_id, cache=None):
+        indexed_parents.append(list(parents_by_id.keys()))
+        return orig_from_parents(parents_by_id, cache)
+
+    monkeypatch.setattr(SceneParentIndex, "from_parents", tracked_from_parents)
+
+    t_base = 1000 * 86400 * 1000  # Day 1000
+    target = rec(
+        t_base,
+        {
+            "Sentence": "どこへ行くの",
+            "Sentence Audio": "",
+            "Picture": "",
+            "Source": "blob:foo",
+        },
+    )
+    in_window_parent = rec(
+        t_base + 1000,
+        {
+            "Sentence": "どこへ行くの？",
+            "Sentence Audio": "[sound:sent_audio.mp3]",
+            "Picture": '<img src="pic.jpg">',
+            "Source": "Show S01E01 10:00",
+        },
+    )
+    # Distant parents across hundreds of days that cannot match the 3-day window
+    distant_parents = [
+        rec(
+            t_base + (i + 10) * 86400 * 1000,
+            {
+                "Sentence": f"遠い文章です番号{i}",
+                "Sentence Audio": f"[sound:audio_{i}.mp3]",
+                "Picture": f'<img src="pic_{i}.jpg">',
+                "Source": f"Show S01E{i} 10:00",
+            },
+        )
+        for i in range(20)
+    ]
+    all_records = [target, in_window_parent, *distant_parents]
+    plan = build_plan(all_records, CFG, scope_note_ids=[target.note_id])
+    assert any(w.field == "Sentence Audio" for w in plan.writes)
+    # Only the in-window parent is indexed, none of the 20 distant parents
+    assert len(indexed_parents) == 1
+    assert in_window_parent.note_id in indexed_parents[0]
+    assert len(indexed_parents[0]) == 1
 
 
 # --- furigana regeneration (bulk-fix dimension 3, QUALITY Q-D11) -------------

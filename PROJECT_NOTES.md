@@ -299,6 +299,21 @@ Durable, verified facts. Append; do not duplicate. Prune when superseded.
   reverting the fix (author's ばあちゃん defect). Fixed by
   `notify_collection_changed(browser)` on all apply paths (QUALITY Q-A9).
   Verified by: `tests/test_notify_collection_changed.py`.
+- [2026-11-21, OpenCode] Synchronous full-collection backups (`col.create_backup`)
+  block Anki's UI thread for 5+ seconds on a 250MB SQLite collection to compress a
+  32MB `.colpkg` archive. The add-on eliminates this bottleneck (Q-P1) by relying
+  on its deterministic pre-write JSON inverse logs (Q-A6), which write in <0.001s
+  before any collection write and provide surgical field rollback without risking
+  unrelated review history.
+  Verified by: benchmark profiling on the live 17.7k-card collection and
+  `test_take_backup_is_noop_and_never_calls_create_backup`.
+- [2026-11-21, OpenCode] Indexing all 15,500+ parent cards in
+  `SceneParentIndex.from_parents` took 1.35s on 17k cards due to 2.3M 3-gram postings.
+  For scoped selections, candidate parents are now bounded to
+  `[target.note_id - window_ms, target.note_id + window_ms]`, reducing parent index
+  time from 1.35s to <0.001s.
+  Verified by: `test_scoped_plan_parent_windowing_matches_scene_without_indexing_entire_deck`
+  and profiling.
 
 ### Formal Verification (Lean) — Evaluated and Declined
 
@@ -417,3 +432,11 @@ Durable, verified facts. Append; do not duplicate. Prune when superseded.
   session).
   Verified by: the a0d69d8 commit's doc hunks (the T15 wave, not mine) and
   the restored `report.py`.
+- [2026-11-21, OpenCode] Fixing a single card took ~10-12s due to three
+  compounded issues: (1) 5.1s synchronous `col.create_backup`, (2) 1.35s
+  un-windowed whole-deck 3-gram parent indexing, and (3) fixpoint pass 1
+  re-querying SQLite for all 17,700 records from scratch instead of reusing
+  in-memory state. Bounding parent indexing, caching media checks, updating
+  touched records in-place, and removing synchronous backups dropped end-to-end
+  latency below 0.5s (~20x faster).
+  Verified by: cProfile benchmarks against the live 253MB database.

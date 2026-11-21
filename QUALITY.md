@@ -397,6 +397,26 @@ first, with the reason.
   silently overwriting and reverting the applied fix to its pre-fix values
   (the author's ばあちゃん defect).
 
+## Performance & Latency
+
+- **Q-P1 — Sub-second single-card fix latency (the 1-second wall).**
+  Fixing a single card selection must complete in under 1 second end-to-end
+  (interactive UI response):
+  1. **No synchronous full-collection backups (`_take_backup`):** Anki's native
+     `create_backup` must never be called on the interactive path; safety and
+     exact reversibility are guaranteed by pre-write JSON inverse logs (Q-A6).
+  2. **In-window candidate parent indexing:** `SceneParentIndex.from_parents`
+     must never index 3-grams of the entire historical deck when planning a
+     bounded selection; only candidate parents within
+     `[t.note_id - window_ms, t.note_id + window_ms]` of targets with scene
+     gaps may be indexed.
+  3. **In-memory fixpoint re-planning:** Passes after the first pass in
+     `apply_plan_to_fixpoint` must reuse in-memory records and update only the
+     touched notes in-place, never issuing a redundant full-deck SQLite query.
+  4. **Cached media existence lookups:** Media checks must query the media
+     directory path once and cache file existence in memory, avoiding redundant
+     Rust FFI and filesystem `stat` bursts.
+
 ## System
 
 - **Q-S1 — The pure core never imports `anki`, `aqt` or PyQt** (AST-enforced).

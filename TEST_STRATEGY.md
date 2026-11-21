@@ -261,11 +261,25 @@ expected counts are:
 
 | Environment | Result |
 |---|---|
-| Author's machine (`python3 -m pytest`, Anki present) | **296 passed** |
-| CI / a venv without Anki | **294 passed, 2 skipped** |
+| Author's machine (`python3 -m pytest`, Anki present) | **303 passed** |
+| CI / a venv without Anki | **301 passed, 2 skipped** |
 
 Both are green; the difference is exactly two self-skipping import checks
 (the dialog modules need a real `aqt`).
+
+## Performance Ratchet (Latency Budget)
+
+- **The 1-Second Wall (Q-P1):** Single-card fixes must execute under 1 second
+  interactive latency. Regressions that re-introduce synchronous `.colpkg`
+  compression (`_take_backup`), full-deck 3-gram indexing on bounded selections,
+  or whole-collection SQLite re-queries during fixpoint passes are refused.
+- **Pinned invariants:**
+  - `tests/test_apply_fixpoint.py::test_take_backup_is_noop_and_never_calls_create_backup`
+    asserts `col.create_backup` is never invoked on the fix path.
+  - `tests/test_apply_fixpoint.py::test_fixpoint_reuses_in_memory_records_on_subsequent_passes`
+    asserts fixpoint passes reuse in-memory records and update only touched notes.
+  - `tests/test_plan.py::test_scoped_plan_parent_windowing_matches_scene_without_indexing_entire_deck`
+    asserts candidate parent indexing is bounded by `window_ms`.
 
 ## Fail-to-pass for bug fixes
 
