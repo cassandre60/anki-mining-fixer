@@ -168,6 +168,34 @@ def _fragment_recoverable(candidate: NoteRecord, cand_norm: str) -> bool:
     return bool(joined) and joined == cand_norm
 
 
+def _shared_audio_parent(
+    candidate: NoteRecord, audio_parents: dict[str, list[NoteRecord]]
+) -> NoteRecord | None:
+    """The sibling whose scene audio this card already carries.
+
+    A card whose audio was filled from a sibling but whose Sentence was left
+    as a fragment is the "skipped expansion" shape (the 飲食 card). Its audio
+    file is byte-identical to that sibling's while its sentence is still a
+    strict fragment of the sibling's full block. Such a card must stay
+    expandable even though it now owns audio — otherwise a single skipped
+    guarded row makes the card unfixable forever (QUALITY Q-A2).
+    """
+    own_audio = sound_files(candidate.get("Sentence Audio"))
+    cand_norm = norm_sentence_match(candidate.get("Sentence"))
+    if not own_audio or not cand_norm:
+        return None
+    seen: set[int] = set()
+    for filename in own_audio:
+        for parent in audio_parents.get(filename, ()):
+            if parent.note_id == candidate.note_id or parent.note_id in seen:
+                continue
+            seen.add(parent.note_id)
+            parent_norm = norm_sentence_match(parent.get("Sentence"))
+            if parent_norm and parent_norm != cand_norm and cand_norm in parent_norm:
+                return parent
+    return None
+
+
 def _unique_anchor(parent_value: str, cloze_body: str) -> bool:
     """The cloze body (the tested word) must occur exactly once in the new
     Sentence; otherwise the template's highlight would be ambiguous or lost."""
@@ -1657,13 +1685,19 @@ def _fragment_anchored_sentence(
     rules first (the child's fragment carries the subtitle's tail arrow, the
     parent's may not), so one write fixes the sentence and the bold together.
     Returns ``None`` when the fragment is not found exactly once.
+
+    A sibling may bold its *own* word inside this fragment (the 飲食 card's
+    parent reads ``…<b>無銭</b>飲食で逮捕されました｡…``). Bold is markup, not
+    text: strip it from the parent before matching so the cloze fragment is
+    contiguous again. The caller's ``_single_bold`` then retargets the one
+    highlight to this card's word.
     """
-    prefix = strip_renderable(candidate.get("cloze-prefix"))
-    body = strip_renderable(candidate.get("cloze-body"))
-    suffix = strip_renderable(candidate.get("cloze-suffix"))
-    if not body:
+    prefix = candidate.get("cloze-prefix") or ""
+    body = candidate.get("cloze-body") or ""
+    suffix = candidate.get("cloze-suffix") or ""
+    if not strip_renderable(body):
         return None
-    parent = parent_sentence
+    parent = re.sub(r"</?b>", "", parent_sentence)
     if rules:
         parent, _applied = repair_sentence(parent, rules)
     fragment = prefix + body + suffix
@@ -1838,16 +1872,20 @@ def _scene_writes_for(
     # a word-mined card).
     #
     # Convergence (one run fixes a card, a second is a no-op): the completion
-    # runs only while the card is still missing its scene audio. This run
-    # fills that audio, so the next run sees a card that already owns its
-    # scene and leaves the sentence alone. A card that already carries its own
-    # `Sentence Audio` is the same kind of unit — its audio matches its own
-    # sentence — so no longer neighbour's block is forced onto it.
+    # runs while the card is missing its scene audio, or while its audio is
+    # byte-identical to this parent's but its sentence is still a fragment of
+    # the parent's block (the "audio filled, sentence skipped" shape — Q-A2).
+    # A card whose audio matches its *own* sentence is a scene unit in its own
+    # right: no neighbour's block is forced onto it.
     cand_norm = norm_sentence_match(candidate.get("Sentence"))
     parent_sentence = parent.get("Sentence")
     parent_furigana = parent.get("Sentence (furigana)")
+    shared_audio = bool(
+        set(sound_files(candidate.get("Sentence Audio")))
+        & set(sound_files(parent.get("Sentence Audio")))
+    )
     if (
-        not is_empty(candidate.get("Sentence Audio"))
+        (not is_empty(candidate.get("Sentence Audio")) and not shared_audio)
         or "Sentence" not in replace_fields
         or "Sentence" in never_copy
     ):
@@ -2310,10 +2348,13 @@ def build_plan(
     # Audio-bearing cards grouped by the episode their timestamped Source
     # names — the fallback for a card whose own sentence is a mis-mine.
     episodes: dict[str, list[NoteRecord]] = {}
+    audio_parents: dict[str, list[NoteRecord]] = {}
     for record in parents_by_id.values():
         key = _episode_key(record.get("Source"))
         if key is not None:
             episodes.setdefault(key, []).append(record)
+        for filename in sound_files(record.get("Sentence Audio")):
+            audio_parents.setdefault(filename, []).append(record)
 
     if scope_note_ids is None:
         scope = [r for r in records if is_blob_source(r.get("Source"))]
@@ -2353,13 +2394,20 @@ def build_plan(
             continue
         target_writes: list[PlannedWrite] = []
         scene_writes, reason = [], None
+        # A shared-audio sibling whose full block still contains this card's
+        # fragment is the "audio filled, sentence skipped" shape: the card
+        # owns scene audio but not its scene text, so it still owes an
+        # expansion (QUALITY Q-A2).
+        skipped_expansion = _shared_audio_parent(target, audio_parents) is not None
         has_scene_gap = scene_dimension and (
             any(is_empty(target.get(f)) for f in scene_fill_fields)
             or ("Source" in scene_replace_fields and is_blob_source(target.get("Source")))
+            or skipped_expansion
         )
         # Incomplete cards (missing audio/picture/ruby/translation or blob Source)
-        # find their scene parent in creation order (session clustering).
-        # Complete cards already have their own audio/picture/sentence and are
+        # and cards whose audio came from a sibling but whose sentence was
+        # skipped find their scene parent in creation order (session clustering).
+        # Other complete cards already have their own audio/sentence and are
         # anchors/sources: they are NEVER overwritten by another scene.
         if has_scene_gap:
             matches = find_scene_parents(

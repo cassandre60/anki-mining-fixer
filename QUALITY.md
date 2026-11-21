@@ -387,6 +387,19 @@ first, with the reason.
   Browser flushes its stale editor contents on `closeEvent` (`saveNow()`),
   silently overwriting and reverting the applied fix to its pre-fix values
   (the author's ばあちゃん defect).
+- **Q-A10 — A skipped guarded expansion never becomes unreachable.** A scene
+  fill may supply a sibling's `Sentence Audio` while the paired `Sentence`
+  expansion is guarded and left unchecked (the 飲食 card, 2026-11-21). The
+  card then owns scene audio but still carries a fragment sentence, and the
+  guard at `_scene_writes_for` would keep every later run from proposing the
+  expansion. Such a card is detected by `_shared_audio_parent`: its audio
+  file is byte-identical to the sibling's while its sentence is a strict
+  fragment of the sibling's full block. It stays expandable, the expansion
+  writes the full block with the bold retargeted to *this* card's word, and
+  the following run is a no-op. Related: `_fragment_anchored_sentence`
+  ignores the parent's bold markup when matching the cloze fragment, so a
+  sibling bolding a different word cannot force the expansion into the
+  guarded state in the first place.
 
 ## System
 

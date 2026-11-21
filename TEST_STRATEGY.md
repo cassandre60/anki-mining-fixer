@@ -131,6 +131,13 @@ not have and must never be given.
   extends it from a fixed fixture to a whole selection, because a cross-run
   cascade only appears *across* cards. Measured 0 rows on the newest 300
   (2026-11-17). Never weaken it.
+- **A skipped expansion stays reachable** (QUALITY Q-A10, owner report
+  2026-11-21, 飲食 note 1795027901231): `tests/test_plan.py` asserts that a
+  parent bolding a different word (「`<b>無銭</b>飲食で…`」) still produces a
+  checked expansion with the bold retargeted to the card's word, and that a
+  card whose audio was filled from a sibling but whose sentence stayed a
+  fragment is re-expanded on the next run — followed by a fixpoint check (the
+  run after that writes nothing). All three cases fail on the pre-fix planner.
 - **Word-anchored scene recovery** (QUALITY Q-D14) is pinned in
   `tests/test_plan.py`: a mis-mined sentence is recovered from the word's
   own spellings, the tighter of two nested same-episode blocks wins, the
@@ -261,8 +268,8 @@ expected counts are:
 
 | Environment | Result |
 |---|---|
-| Author's machine (`python3 -m pytest`, Anki present) | **296 passed** |
-| CI / a venv without Anki | **294 passed, 2 skipped** |
+| Author's machine (`python3 -m pytest`, Anki present) | **298 passed** |
+| CI / a venv without Anki | **296 passed, 2 skipped** |
 
 Both are green; the difference is exactly two self-skipping import checks
 (the dialog modules need a real `aqt`).

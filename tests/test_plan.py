@@ -74,14 +74,127 @@ def test_expansion_guard_when_fragment_not_recoverable():
     assert "fragment-not-recoverable" in rows[0].badges
 
 
-def test_expansion_guard_when_anchor_not_unique():
+def test_expansion_uses_the_fragment_when_anchor_not_unique():
     parent_f = dict(PARENT.fields)
-    # scene text contains 診察 twice -> highlight ambiguous
+    # 診察 occurs three times in the block, but the card's own fragment
+    # 「先生は今 診察中ですので➡」 is unique — the highlight is unambiguous.
     parent_f["Sentence"] = "[TEL] 診察の先生は今 診察中ですので➡代わりに診察します。"
     p = rec(PARENT.note_id, parent_f, tags=("asbplayer", "yomitan"))
     plan = build_plan([p, CHILD], CFG, scope_note_ids=[CHILD.note_id])
     rows = [w for w in plan.writes if w.note_id == CHILD.note_id and w.field == "Sentence"]
-    assert rows and rows[0].default_checked is False
+    assert rows and rows[0].default_checked
+    assert "先生は今 <b>診察</b>中ですので➡" in rows[0].new_value
+
+
+def test_expansion_is_checked_when_parent_bolds_a_different_word():
+    # The 飲食 card: the tested word occurs twice in the parent block
+    # (飲食店 / 無銭飲食) and the sibling bolds 無銭 — 「<b>無銭</b>飲食で…」.
+    # Bold is markup, so the cloze fragment must still be found and the
+    # expansion must ship checked with the highlight retargeted to 飲食.
+    parent_sentence = (
+        "(ドアが開く音)(警官) お待たせしました｡<br>"
+        "おかあさんが 人形町の飲食店で<br><b>無銭</b>飲食で逮捕されました｡"
+    )
+    parent = rec(
+        10_000_000,
+        {
+            "Expression": "無銭飲食",
+            "reading": "むせんいんしょく",
+            "Sentence": parent_sentence,
+            "Sentence Audio": " [sound:scene.webm] ",
+            "Picture": '<img src="scene.jpeg">',
+            "Source": "Show.mp4 (6m53s)",
+            "Sentence (furigana)": parent_sentence,
+            "cloze-body": "無銭飲食",
+        },
+        tags=("asbplayer",),
+    )
+    child = rec(
+        10_000_000 + 60_000,
+        {
+            "Expression": "飲食",
+            "reading": "いんしょく",
+            "Sentence": "無銭<b>飲食</b>で逮捕されました｡",
+            "Sentence Audio": "",
+            "Picture": "",
+            "Source": "blob:https://asbplayer/xyz",
+            "Sentence (furigana)": "",
+            "cloze-prefix": "無銭",
+            "cloze-body": "飲食",
+            "cloze-suffix": "で逮捕されました｡",
+        },
+        tags=("yomitan",),
+    )
+    plan = build_plan([parent, child], CFG, scope_note_ids=[child.note_id])
+    rows = [
+        w
+        for w in plan.writes
+        if w.note_id == child.note_id and w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE
+    ]
+    assert len(rows) == 1
+    assert rows[0].default_checked
+    assert "cloze-anchor-not-unique" not in rows[0].badges
+    assert "<b>無銭</b>" not in rows[0].new_value
+    assert rows[0].new_value == (
+        "(ドアが開く音)(警官) お待たせしました｡<br>"
+        "おかあさんが 人形町の飲食店で<br>無銭<b>飲食</b>で逮捕されました｡"
+    )
+
+
+def test_skipped_expansion_is_recovered_on_the_next_run():
+    # The 飲食 card after the buggy run: audio, picture, ruby and Source came
+    # from the sibling, but the Sentence stayed a fragment. A later run must
+    # finish the job instead of reporting nothing-to-fill (QUALITY Q-A2).
+    audio = " [sound:scene.webm] "
+    parent_sentence = (
+        "(ドアが開く音)(警官) お待たせしました｡<br>"
+        "おかあさんが 人形町の飲食店で<br>無銭飲食で逮捕されました｡"
+    )
+    parent = rec(
+        10_000_000,
+        {
+            "Expression": "無銭飲食",
+            "reading": "むせんいんしょく",
+            "Sentence": parent_sentence,
+            "Sentence Audio": audio,
+            "Picture": '<img src="scene.jpeg">',
+            "Source": "Show.mp4 (6m53s)",
+            "Sentence (furigana)": parent_sentence,
+            "cloze-body": "無銭飲食",
+        },
+        tags=("asbplayer",),
+    )
+    child_fields = {
+        "Expression": "飲食",
+        "reading": "いんしょく",
+        "Sentence": "無銭<b>飲食</b>で逮捕されました｡",
+        "Sentence Audio": audio,
+        "Picture": '<img src="scene.jpeg">',
+        "Source": "Show.mp4 (6m53s)",
+        "Sentence (furigana)": "無銭飲食[むせんいんしょく]で逮捕されました｡",
+        "cloze-prefix": "無銭",
+        "cloze-body": "飲食",
+        "cloze-suffix": "で逮捕されました｡",
+    }
+    child = rec(10_000_000 + 60_000, child_fields, tags=("asbplayer", "auto-filled", "yomitan"))
+    plan = build_plan([parent, child], CFG, scope_note_ids=[child.note_id])
+    rows = [
+        w
+        for w in plan.writes
+        if w.note_id == child.note_id and w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE
+    ]
+    assert len(rows) == 1 and rows[0].default_checked
+    expected = parent_sentence.replace(
+        "無銭飲食で逮捕されました｡", "無銭<b>飲食</b>で逮捕されました｡"
+    )
+    assert rows[0].new_value == expected
+
+    # Fixpoint: once the expansion is applied, the next run writes nothing.
+    applied = dict(child_fields)
+    applied["Sentence"] = expected
+    child2 = rec(child.note_id, applied, tags=child.tags)
+    plan2 = build_plan([parent, child2], CFG, scope_note_ids=[child.note_id])
+    assert not [w for w in plan2.writes if w.note_id == child.note_id and w.field == "Sentence"]
 
 
 def test_furigana_fill_paired_with_guarded_expansion():
