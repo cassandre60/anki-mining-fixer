@@ -5,7 +5,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from test_golden_scene import CFG, CHILD, CHILD_ID, PARENT, PARENT_ID
+from test_golden_scene import (
+    CFG,
+    CHILD,
+    CHILD_ID,
+    FOREIGN_BOLD_PLAIN_SENTENCE,
+    PARENT,
+    PARENT_ID,
+    foreign_bold_child,
+    foreign_bold_sibling,
+)
 
 from mining_fixer.matching import NoteRecord
 from mining_fixer.normalize import MorphToken, furigana_base_matches, strip_renderable
@@ -87,44 +96,12 @@ def test_expansion_uses_the_fragment_when_anchor_not_unique():
 
 
 def test_expansion_is_checked_when_parent_bolds_a_different_word():
-    # The 飲食 card: the tested word occurs twice in the parent block
+    # FOREIGN_BOLD: the tested word occurs twice in the parent block
     # (飲食店 / 無銭飲食) and the sibling bolds 無銭 — 「<b>無銭</b>飲食で…」.
     # Bold is markup, so the cloze fragment must still be found and the
     # expansion must ship checked with the highlight retargeted to 飲食.
-    parent_sentence = (
-        "(ドアが開く音)(警官) お待たせしました｡<br>"
-        "おかあさんが 人形町の飲食店で<br><b>無銭</b>飲食で逮捕されました｡"
-    )
-    parent = rec(
-        10_000_000,
-        {
-            "Expression": "無銭飲食",
-            "reading": "むせんいんしょく",
-            "Sentence": parent_sentence,
-            "Sentence Audio": " [sound:scene.webm] ",
-            "Picture": '<img src="scene.jpeg">',
-            "Source": "Show.mp4 (6m53s)",
-            "Sentence (furigana)": parent_sentence,
-            "cloze-body": "無銭飲食",
-        },
-        tags=("asbplayer",),
-    )
-    child = rec(
-        10_000_000 + 60_000,
-        {
-            "Expression": "飲食",
-            "reading": "いんしょく",
-            "Sentence": "無銭<b>飲食</b>で逮捕されました｡",
-            "Sentence Audio": "",
-            "Picture": "",
-            "Source": "blob:https://asbplayer/xyz",
-            "Sentence (furigana)": "",
-            "cloze-prefix": "無銭",
-            "cloze-body": "飲食",
-            "cloze-suffix": "で逮捕されました｡",
-        },
-        tags=("yomitan",),
-    )
+    parent = foreign_bold_sibling()
+    child = foreign_bold_child()
     plan = build_plan([parent, child], CFG, scope_note_ids=[child.note_id])
     rows = [
         w
@@ -135,48 +112,17 @@ def test_expansion_is_checked_when_parent_bolds_a_different_word():
     assert rows[0].default_checked
     assert "cloze-anchor-not-unique" not in rows[0].badges
     assert "<b>無銭</b>" not in rows[0].new_value
-    assert rows[0].new_value == (
-        "(ドアが開く音)(警官) お待たせしました｡<br>"
-        "おかあさんが 人形町の飲食店で<br>無銭<b>飲食</b>で逮捕されました｡"
+    assert rows[0].new_value == FOREIGN_BOLD_PLAIN_SENTENCE.replace(
+        "無銭飲食で逮捕されました｡", "無銭<b>飲食</b>で逮捕されました｡"
     )
 
 
 def test_skipped_expansion_is_recovered_on_the_next_run():
-    # The 飲食 card after the buggy run: audio, picture, ruby and Source came
-    # from the sibling, but the Sentence stayed a fragment. A later run must
-    # finish the job instead of reporting nothing-to-fill (QUALITY Q-A2).
-    audio = " [sound:scene.webm] "
-    parent_sentence = (
-        "(ドアが開く音)(警官) お待たせしました｡<br>"
-        "おかあさんが 人形町の飲食店で<br>無銭飲食で逮捕されました｡"
-    )
-    parent = rec(
-        10_000_000,
-        {
-            "Expression": "無銭飲食",
-            "reading": "むせんいんしょく",
-            "Sentence": parent_sentence,
-            "Sentence Audio": audio,
-            "Picture": '<img src="scene.jpeg">',
-            "Source": "Show.mp4 (6m53s)",
-            "Sentence (furigana)": parent_sentence,
-            "cloze-body": "無銭飲食",
-        },
-        tags=("asbplayer",),
-    )
-    child_fields = {
-        "Expression": "飲食",
-        "reading": "いんしょく",
-        "Sentence": "無銭<b>飲食</b>で逮捕されました｡",
-        "Sentence Audio": audio,
-        "Picture": '<img src="scene.jpeg">',
-        "Source": "Show.mp4 (6m53s)",
-        "Sentence (furigana)": "無銭飲食[むせんいんしょく]で逮捕されました｡",
-        "cloze-prefix": "無銭",
-        "cloze-body": "飲食",
-        "cloze-suffix": "で逮捕されました｡",
-    }
-    child = rec(10_000_000 + 60_000, child_fields, tags=("asbplayer", "auto-filled", "yomitan"))
+    # POST_PARTIAL_APPLY: audio, picture, ruby and Source came from the
+    # sibling, but the Sentence stayed a fragment. A later run must finish
+    # the job instead of reporting nothing-to-fill (QUALITY Q-A2).
+    parent = foreign_bold_sibling()
+    child = foreign_bold_child(post_partial_apply=True)
     plan = build_plan([parent, child], CFG, scope_note_ids=[child.note_id])
     rows = [
         w
@@ -184,17 +130,50 @@ def test_skipped_expansion_is_recovered_on_the_next_run():
         if w.note_id == child.note_id and w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE
     ]
     assert len(rows) == 1 and rows[0].default_checked
-    expected = parent_sentence.replace(
+    expected = FOREIGN_BOLD_PLAIN_SENTENCE.replace(
         "無銭飲食で逮捕されました｡", "無銭<b>飲食</b>で逮捕されました｡"
     )
     assert rows[0].new_value == expected
 
     # Fixpoint: once the expansion is applied, the next run writes nothing.
-    applied = dict(child_fields)
+    applied = dict(child.fields)
     applied["Sentence"] = expected
     child2 = rec(child.note_id, applied, tags=child.tags)
     plan2 = build_plan([parent, child2], CFG, scope_note_ids=[child.note_id])
     assert not [w for w in plan2.writes if w.note_id == child.note_id and w.field == "Sentence"]
+
+
+def test_checked_only_apply_keeps_guarded_work_reachable():
+    """Q-A11: a guarded row skipped by a run is still owed on the next one.
+
+    Metamorphic property: apply only the checked writes, re-plan, and every
+    previously guarded field must still be proposed. The 飲食 incident broke
+    exactly this — the checked audio fill destroyed the guarded expansion's
+    only trigger, so the next run reported nothing-to-fill.
+    """
+    fields = dict(CHILD.fields)
+    fields["cloze-prefix"] = ""
+    fields["cloze-body"] = ""
+    fields["cloze-suffix"] = ""
+    child = rec(CHILD.note_id, fields, tags=("yomitan",))
+    first = build_plan([PARENT, child], CFG, scope_note_ids=[child.note_id])
+    checked = [w for w in first.writes if w.note_id == child.note_id and w.default_checked]
+    guarded = [w for w in first.writes if w.note_id == child.note_id and not w.default_checked]
+    assert checked and guarded
+
+    after = dict(child.fields)
+    for write in checked:
+        if write.field != "tags":
+            after[write.field] = write.new_value
+    child2 = rec(child.note_id, after, tags=child.tags)
+    second = build_plan([PARENT, child2], CFG, scope_note_ids=[child.note_id])
+
+    for write in guarded:
+        if write.field == "tags":
+            continue
+        assert any(q.field == write.field for q in second.writes if q.note_id == child.note_id), (
+            f"guarded {write.field} vanished after only checked writes were applied"
+        )
 
 
 def test_furigana_fill_paired_with_guarded_expansion():
