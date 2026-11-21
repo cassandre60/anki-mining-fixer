@@ -82,7 +82,7 @@ guarded row sends the whole note to the review shortlist) and *text-unit*
 atomicity (the sentence and its ruby are written together or not at all;
 scene audio, picture, translation and source are independent fills). The
 dialog shows the resulting counts — filled notes, tag-only notes, untouched,
-review — and the run itself: preflight, forced Anki backup, undo log **before**
+review — and the run itself: preflight, undo log **before**
 the first write, chunked apply, post-write verification.
 
 ## Data model

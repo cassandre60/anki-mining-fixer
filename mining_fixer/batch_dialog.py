@@ -38,6 +38,7 @@ from .collection_io import (
     plan_preview,
     write_dry_run,
 )
+from .matching import NoteRecord
 from .plan import OP_ADD_TAGS
 from .report import GLANCE_LIMIT, OP_LABELS, change_lines, render_batch_summary
 
@@ -67,7 +68,16 @@ class BatchDialog(QDialog):
         self.cfg = cfg if cfg is not None else load_config()
         self.browser = browser
         self.preview: Preview = plan_preview(col, self.cfg, scope_note_ids)
-        self.pending: tuple[ApplyDecision, dict, dict, tuple[int, ...]] | None = None
+        self.pending: (
+            tuple[
+                ApplyDecision,
+                dict,
+                dict,
+                tuple[int, ...],
+                dict[int, NoteRecord] | None,
+            ]
+            | None
+        ) = None
         self._changes_total = 0
         self._left_total = 0
 
@@ -221,6 +231,7 @@ class BatchDialog(QDialog):
             self._meta(selection),
             self.cfg,
             tuple(self.preview.scope),
+            self.preview.records_by_id,
         )
         self.accept()
 
@@ -272,10 +283,22 @@ class BatchDialog(QDialog):
 
 
 def _finish_batch(col, pending, browser=None, parent=None) -> None:
-    decision, meta, cfg, scope = pending
+    if len(pending) == 5:
+        decision, meta, cfg, scope, initial_records = pending
+    else:
+        decision, meta, cfg, scope = pending
+        initial_records = None
     # One Apply is the whole fix (QUALITY Q-A2): keep re-planning on the real
     # post-write state until a pass writes nothing, then report the total.
-    result = apply_plan_to_fixpoint(col, cfg, scope, meta, first_decision=decision)
+    result = apply_plan_to_fixpoint(
+        col,
+        cfg,
+        scope,
+        meta,
+        first_decision=decision,
+        take_backup=False,
+        initial_records=initial_records,
+    )
     if result.modified:
         notify_collection_changed(browser=browser)
     if not result.writes:

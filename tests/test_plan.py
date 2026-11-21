@@ -1396,6 +1396,46 @@ def test_strip_dash_is_on_by_default_in_the_shipped_config():
     assert "strip-dash" in cfg["sentence_repair_rules"]
 
 
+def test_strip_nbsp_is_on_by_default_in_the_shipped_config():
+    cfg = json.loads(
+        (Path(__file__).resolve().parent.parent / "mining_fixer" / "config.json").read_text()
+    )
+    assert "strip-nbsp" in cfg["sentence_repair_rules"]
+
+
+def test_a_stray_nbsp_is_stripped_from_the_sentence():
+    sentence = "彼女は&nbsp;毎朝<b>いつも</b>起きて"
+    card = rec(1, {"Sentence": sentence, "Expression": "いつも"})
+    cfg = {**CFG, "sentence_repair_rules": ["strip-nbsp"]}
+    plan = build_plan([card], cfg, scope_note_ids=[card.note_id])
+    writes = [w for w in plan.writes if w.field == "Sentence"]
+    assert len(writes) == 1
+    write = writes[0]
+    assert write.op == OP_REPAIR_SENTENCE
+    assert write.badges == ("strip-nbsp",)
+    assert write.new_value == "彼女は毎朝<b>いつも</b>起きて"
+
+
+def test_empty_reading_filled_from_own_furigana():
+    card = rec(
+        1,
+        {
+            "Expression": "口",
+            "reading": "",
+            "furigana": "口[くち]",
+        },
+    )
+    plan = build_plan([card], CFG, scope_note_ids=[1])
+    writes = [w for w in plan.writes if w.field == "reading"]
+    assert len(writes) == 1
+    write = writes[0]
+    assert write.op == OP_FILL
+    assert write.old_value == ""
+    assert write.new_value == "くち"
+    assert write.badges == ("reading-derived-from-furigana",)
+    assert write.default_checked is True
+
+
 # --- furigana regeneration (bulk-fix dimension 3, QUALITY Q-D11) -------------
 
 REGEN_CFG = {**CFG, "batch_regenerate_furigana": True}

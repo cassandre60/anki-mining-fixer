@@ -203,6 +203,27 @@ def test_repair_strips_stray_horizontal_bars():
     assert repair_sentence("あ\u2015い", ("flatten-div-blocks",)) == ("あ\u2015い", ())
 
 
+def test_repair_strips_nbsp_entities_and_unicode_nbsp():
+    # Non-breaking spaces (&nbsp; and \u00a0) dumped during web/subtitle mining
+    # are noise: strip adjacent to Japanese/punctuation, convert to single space
+    # between Latin/digits. Idempotent.
+    text = "彼女は&nbsp;毎朝<b>いつも</b><br>食べながら<b>遊ぶ&nbsp;</b>"
+    new, applied = repair_sentence(text, ("strip-nbsp",))
+    assert applied == ("strip-nbsp",)
+    assert new == "彼女は毎朝<b>いつも</b><br>食べながら<b>遊ぶ</b>"
+    assert repair_sentence(new, ("strip-nbsp",)) == (new, ())
+
+    # Between Latin/digits: converts to single space
+    assert repair_sentence("Episode&nbsp;3", ("strip-nbsp",)) == ("Episode 3", ("strip-nbsp",))
+    assert repair_sentence("Part\u00a0\u00a01", ("strip-nbsp",)) == ("Part 1", ("strip-nbsp",))
+
+    # At line boundaries and with unicode \u00a0
+    assert repair_sentence("&nbsp;おいしい\u00a0", ("strip-nbsp",)) == ("おいしい", ("strip-nbsp",))
+
+    # With the rule unlisted, nbsp stays untouched
+    assert repair_sentence("あ&nbsp;い", ("strip-dash", "strip-arrows")) == ("あ&nbsp;い", ())
+
+
 def test_repair_keeps_bold_markup_around_a_tail_arrow():
     text = "俺は弱くて 誰も助けらんなかった<br>それどころか 伏黒を殺し<b>かけた</b>➡"
     new, applied = repair_sentence(text, ALL_RULES)

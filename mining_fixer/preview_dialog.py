@@ -7,6 +7,8 @@ is exactly what is written.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from aqt.qt import (
     QAbstractItemView,
     QDialog,
@@ -41,6 +43,7 @@ from .collection_io import (
     read_state,
     write_run_log,
 )
+from .matching import NoteRecord
 from .plan import PlannedWrite
 from .report import OP_LABELS, badge_explanation, guard_reason
 
@@ -365,6 +368,7 @@ class PreviewDialog(QDialog):
             self.cfg,
             tuple(self.preview.scope),
             declined_keys,
+            self.preview.records_by_id,
         )
         self.accept()
 
@@ -378,6 +382,7 @@ def _finish_apply(
     cfg: dict | None = None,
     scope: tuple[int, ...] = (),
     excluded_keys: frozenset[tuple[int, str]] = frozenset(),
+    initial_records: Mapping[int, NoteRecord] | None = None,
 ) -> None:
     """Preflight, log, write to fixpoint, verify — outside the dialog (Q-A2/Q-A5)."""
     field_problems = preflight_fields(col, decision)
@@ -397,6 +402,7 @@ def _finish_apply(
             first_decision=decision,
             take_backup=False,
             excluded_keys=excluded_keys,
+            initial_records=initial_records,
         )
         writes = result.writes
         modified = result.modified
@@ -440,11 +446,14 @@ def apply_pending(col, pending, browser=None, parent=None) -> None:
     loses the save callback (torn-down editor); the write is once-only either
     way.
     """
-    if len(pending) == 5:
+    if len(pending) == 6:
+        decision, meta, cfg, scope, excluded_keys, initial_records = pending
+    elif len(pending) == 5:
         decision, meta, cfg, scope, excluded_keys = pending
+        initial_records = None
     else:
         decision, meta = pending
-        cfg, scope, excluded_keys = None, (), frozenset()
+        cfg, scope, excluded_keys, initial_records = None, (), frozenset(), None
     run_after_editor_saved(
         browser,
         lambda: _finish_apply(
@@ -456,6 +465,7 @@ def apply_pending(col, pending, browser=None, parent=None) -> None:
             cfg=cfg,
             scope=scope,
             excluded_keys=excluded_keys,
+            initial_records=initial_records,
         ),
         schedule=lambda once: QTimer.singleShot(1500, once),
     )

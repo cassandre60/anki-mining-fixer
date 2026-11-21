@@ -9,7 +9,11 @@ first, with the reason.
 
 - **Q-D1 — Fills only touch empty fields.** A field with any non-whitespace
   content is never written by a `fill` (`old_value == ""`); markup-only values
-  like `<hr>` count as occupied. `cloze-*` and `Definition` / `Extended
+  like `<hr>` count as occupied. When `reading` is empty and no sibling fills it,
+  the note's own `furigana` field serves as a self-contained oracle
+  (`reading_from_furigana`, badge `reading-derived-from-furigana`), filling
+  `reading` with the derived kana reading without needing sibling cards.
+  `cloze-*` and `Definition` / `Extended
   definition` belong to `FIELD_NEVER_COPY` and are never copied from sibling
   cards; empty container markup in definition fields (`<ol></ol>`) is cleared
   solely by `strip_empty_glossary` (Q-D13).
@@ -103,7 +107,11 @@ first, with the reason.
   **Sentence-field-only**: `plan._ruby_repair_rules` excludes `strip-dash`
   from every ruby ("Sentence (furigana)") call site, so the ruby and every
   other field keep the bar — "only inside the sentence field, not
-  everywhere".
+  everywhere". Added also: `strip-nbsp` (non-breaking spaces — `&nbsp;` and
+  `\u00a0` — dumped during web/subtitle mining; converts to a single space
+  between Latin/digit tokens, strips when adjacent to CJK or Japanese
+  punctuation; unlike `strip-dash`, applies to both `Sentence` and its ruby
+  `Sentence (furigana)`; owner addition 2026-11-21).
   `<br>` line breaks and spacing are otherwise deliberately NOT rewritten —
   they are the sentence's pause structure (owner decision 2026-11-15;
   `flatten-div-blocks` only converts block *tags*, never an existing `<br>`;
@@ -115,7 +123,7 @@ first, with the reason.
   (`cloze-body`) occurs. The transformation is idempotent. By owner
   decision (2026-11-16) the dimension runs by default: the tool fixes on
   its own (`batch_repair_sentence: true`, rules `flatten-div-blocks`,
-  `strip-arrows`, `join-speaker-lines`, `strip-dash`); the
+  `strip-arrows`, `join-speaker-lines`, `strip-dash`, `strip-nbsp`); the
   config key remains the escape hatch to switch it off, and every guard
   above still applies.
 - **Q-D11 — Furigana regeneration uses Japanese Support as the only
@@ -356,13 +364,14 @@ first, with the reason.
   silently dropped and never written twice. This is what keeps a pending
   editor save from landing on top of the run — and away from Anki's own
   legacy-editor teardown race.
-- **Q-A6 — A bulk run is recoverable before it starts.** Every batch takes an
-  Anki backup first and **aborts without writing if the backup fails**; it
-  writes its undo log **before the first write**, applies in chunks, and then
-  re-reads every written field and tag set to verify the values landed
-  (`collection_io.apply_batch`, `applier.verify_writes`). A run that crashes
-  mid-way is therefore still exactly reversible, and a partial write is
-  reported rather than silently accepted.
+- **Q-A6 — A run is recoverable before it starts via surgical inverse logs.**
+  Every run writes its undo log **before the first write**, applies in chunks,
+  and then re-reads every written field and tag set to verify the values landed
+  (`collection_io.apply_batch`, `applier.verify_writes`). Because the JSON
+  inverse log records the exact prior values and is written before SQLite is
+  touched, an interrupted or crashed run is immediately reversible via Tools →
+  Mining Fixer: undo last run without multi-second UI freezing or review history
+  loss. A partial write is reported rather than silently accepted.
 - **Q-A7 — The configured fields must exist on the note type.** Field names
   are checked against the live note type before any write
   (`collection_io.preflight_fields`); drift aborts the run instead of raising

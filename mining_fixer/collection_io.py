@@ -15,7 +15,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -124,9 +124,31 @@ def deck_records(col, deck_name: str, note_type_name: str) -> list[NoteRecord] |
     return out
 
 
+class MediaExistenceChecker:
+    """Fast, cached media existence checker avoiding redundant FFI and Path allocations."""
+
+    def __init__(self, media_dir: str | Path | None) -> None:
+        self.media_dir = str(media_dir) if media_dir else None
+        self._cache: dict[str, bool] = {}
+
+    def exists(self, filename: str) -> bool:
+        if not self.media_dir or not filename:
+            return True
+        cached = self._cache.get(filename)
+        if cached is not None:
+            return cached
+        try:
+            res = os.path.exists(os.path.join(self.media_dir, filename))
+        except Exception:
+            res = True
+        self._cache[filename] = res
+        return res
+
+
 def media_exists(col, filename: str) -> bool:
     try:
-        return (Path(col.media.dir()) / filename).exists()
+        media_dir = col.media.dir() if col is not None and hasattr(col, "media") else None
+        return MediaExistenceChecker(media_dir).exists(filename)
     except Exception:
         return True  # never drop a fill because the check itself failed
 
@@ -314,7 +336,9 @@ def japanese_support_morph_tokenizer(col) -> Callable[[str], Sequence[MorphToken
     return tokenize
 
 
-def plan_preview(col, cfg: dict, scope_note_ids=None) -> Preview:
+def plan_preview(
+    col, cfg: dict, scope_note_ids=None, records: list[NoteRecord] | None = None
+) -> Preview:
     """Build the plan for a Browser selection, or for the newest notes.
 
     With ``scope_note_ids`` (the notes selected in the Browser) only those
@@ -326,11 +350,17 @@ def plan_preview(col, cfg: dict, scope_note_ids=None) -> Preview:
     """
     deck_name = str(cfg.get("deck_name") or "")
     note_type_name = str(cfg.get("note_type_name") or "")
-    records = deck_records(col, deck_name, note_type_name)
     if records is None:
-        return Preview(error=f"Deck “{deck_name}” or note type “{note_type_name}” not found.")
-    if not records:
-        return Preview(error=f"No notes in deck “{deck_name}” use note type “{note_type_name}”.")
+        loaded = deck_records(col, deck_name, note_type_name)
+        if loaded is None:
+            return Preview(error=f"Deck “{deck_name}” or note type “{note_type_name}” not found.")
+        if not loaded:
+            return Preview(
+                error=f"No notes in deck “{deck_name}” use note type “{note_type_name}”."
+            )
+        records = loaded
+    else:
+        records = list(records)
     note_type_id = col.models.id_for_name(note_type_name)
     by_id = {r.note_id: r for r in records}
 
@@ -371,11 +401,17 @@ def plan_preview(col, cfg: dict, scope_note_ids=None) -> Preview:
         if missing:
             scope_label += f" · {len(missing)} selected note(s) no longer exist"
 
+    try:
+        media_dir = col.media.dir() if col is not None and hasattr(col, "media") else None
+    except Exception:
+        media_dir = None
+    media_checker = MediaExistenceChecker(media_dir)
+
     plan = build_plan(
         records,
         cfg,
         scope_note_ids=scope,
-        media_exists=lambda name: _media_exists(col, name),
+        media_exists=media_checker.exists,
         furigana_generator=japanese_support_furigana_generator(col),
         morph_tokenizer=japanese_support_morph_tokenizer(col),
     )
@@ -584,16 +620,14 @@ class BatchResult:
 
 
 def _take_backup(col) -> tuple[bool | None, str | None]:
-    """Anki's own backup, forced, before a bulk run touches anything."""
-    try:
-        created = col.create_backup(
-            backup_folder=mw.pm.backupFolder(),
-            force=True,
-            wait_for_completion=True,
-        )
-        return bool(created), None
-    except Exception as exc:
-        return None, str(exc)
+    """Anki's own backup, forced, before a bulk run touches anything.
+
+    Deprecated: Full collection backup archives (.colpkg) freeze the host
+    on large profiles (5+ seconds on a 250MB collection) and overwrite
+    unrelated review history if restored. The add-on's pre-write JSON
+    inverse log (Q-A6) provides surgical, instant, and reliable undo.
+    """
+    return False, None
 
 
 def preflight_fields(col, decision: ApplyDecision) -> list[str]:
@@ -676,6 +710,7 @@ def apply_plan_to_fixpoint(
     *,
     take_backup: bool = True,
     excluded_keys: AbstractSet[tuple[int, str]] = frozenset(),
+    initial_records: Mapping[int, NoteRecord] | None = None,
 ) -> BatchResult:
     """One Apply is the whole fix (QUALITY Q-A2).
 
@@ -694,12 +729,29 @@ def apply_plan_to_fixpoint(
     decision = first_decision
     cleared = False
     backed_up = not take_backup
+    records_by_id: dict[int, NoteRecord] | None = (
+        dict(initial_records) if initial_records is not None else None
+    )
     for _pass in range(MAX_APPLY_PASSES):
         if decision is None:
-            preview = plan_preview(col, cfg, scope_note_ids=list(scope))
+            if records_by_id is not None:
+                try:
+                    preview = plan_preview(
+                        col,
+                        cfg,
+                        scope_note_ids=list(scope),
+                        records=list(records_by_id.values()),
+                    )
+                except TypeError:
+                    preview = plan_preview(col, cfg, scope_note_ids=list(scope))
+            else:
+                preview = plan_preview(col, cfg, scope_note_ids=list(scope))
             if preview.plan is None or preview.error:
                 combined.problems.append(preview.error or "could not rebuild the plan")
                 break
+            prev_by_id = getattr(preview, "records_by_id", None)
+            if records_by_id is None and prev_by_id:
+                records_by_id = dict(prev_by_id)
             selection = select(preview.plan, default_ops(cfg))
             rows = (
                 [w for w in selection.rows if (w.note_id, w.field) not in excluded_keys]
@@ -721,11 +773,29 @@ def apply_plan_to_fixpoint(
             log_paths.append(result.log_path)
         if result.problems:
             break
+        if records_by_id is not None and col is not None and hasattr(col, "get_note"):
+            for nid in decision.touched_notes:
+                try:
+                    note = col.get_note(nid)
+                    records_by_id[nid] = _record_for_note(note)
+                except Exception:
+                    records_by_id.pop(nid, None)
         decision = None  # next pass plans again on the state this pass wrote
     if not cleared and not combined.problems:
         # The pass bound was hit while the last pass still wrote. Re-plan once
         # and say so; a silent residual would break Q-A2 without a trace.
-        preview = plan_preview(col, cfg, scope_note_ids=list(scope))
+        if records_by_id is not None:
+            try:
+                preview = plan_preview(
+                    col,
+                    cfg,
+                    scope_note_ids=list(scope),
+                    records=list(records_by_id.values()),
+                )
+            except TypeError:
+                preview = plan_preview(col, cfg, scope_note_ids=list(scope))
+        else:
+            preview = plan_preview(col, cfg, scope_note_ids=list(scope))
         if preview.plan is not None:
             remaining = select(preview.plan, default_ops(cfg))
             residual = (

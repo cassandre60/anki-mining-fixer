@@ -336,7 +336,13 @@ def is_empty_glossary_shell(value: str) -> bool:
 # bold markup, sound tags, images, brackets and every spoken character pass
 # through untouched.
 
-REPAIR_RULES = ("flatten-div-blocks", "strip-arrows", "join-speaker-lines", "strip-dash")
+REPAIR_RULES = (
+    "flatten-div-blocks",
+    "strip-arrows",
+    "join-speaker-lines",
+    "strip-dash",
+    "strip-nbsp",
+)
 
 #: The stray horizontal bar (U+2015) the Mining cards' Sentences carry — the
 #: owner's 2026-11-20 report: the character is present in the cards and is
@@ -347,6 +353,15 @@ REPAIR_RULES = ("flatten-div-blocks", "strip-arrows", "join-speaker-lines", "str
 #: Q-D15).
 _DASH_RE = re.compile("\u2015+")
 RUBY_EXCLUDED_RULES = frozenset({"strip-dash"})
+
+_LATIN_NBSP_LATIN = re.compile(r"([A-Za-z0-9])(?:&nbsp;|\u00a0)+([A-Za-z0-9])", re.IGNORECASE)
+_NBSP_RE = re.compile(r"&nbsp;|\u00a0", re.IGNORECASE)
+
+
+def _strip_nbsp(text: str) -> str:
+    s = _LATIN_NBSP_LATIN.sub(r"\1 \2", text)
+    return _NBSP_RE.sub("", s)
+
 
 # A continuation arrow only ever marks "the line continues", so it is
 # stripped only at a line tail — immediately before a <br>, a newline or the
@@ -476,6 +491,11 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
         stripped = _DASH_RE.sub("", s)
         if stripped != s:
             applied.append("strip-dash")
+            s = stripped
+    if "strip-nbsp" in wanted:
+        stripped = _strip_nbsp(s)
+        if stripped != s:
+            applied.append("strip-nbsp")
             s = stripped
     if not applied:
         return text, ()

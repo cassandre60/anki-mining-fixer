@@ -350,10 +350,13 @@ def test_all_known_badges_have_explanations():
         "dictionary-version-may-differ",
         "yomitan-gloss",
         "single-source-user-authored",
+        "reading-derived-from-furigana",
         # Repair rules
         "strip-arrows",
         "flatten-div-blocks",
         "join-speaker-lines",
+        "strip-dash",
+        "strip-nbsp",
     ]
     for badge in known_static_badges:
         explanation = badge_explanation(badge)

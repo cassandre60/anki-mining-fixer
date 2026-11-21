@@ -10,6 +10,7 @@ exactly what is written.
 
 from __future__ import annotations
 
+import bisect
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Sequence
@@ -2068,6 +2069,32 @@ def _word_writes_for(
     return writes
 
 
+def _self_reading_write(target: NoteRecord, cfg: dict) -> PlannedWrite | None:
+    """Fill empty ``reading`` from the note's own ``furigana`` field (self-oracled).
+
+    When a card has no sibling to fill ``reading`` from (e.g. solitary book
+    mines or single-card scenes), but its own ``furigana`` contains well-formed
+    bracket notation (``診察[しんさつ]``), the reading is unambiguously known.
+    """
+    if "reading" not in cfg.get("word_fill_fields", ()):
+        return None
+    if not is_empty(target.get("reading")):
+        return None
+    derived = reading_from_furigana(target.get("furigana") or "")
+    if not derived:
+        return None
+    return PlannedWrite(
+        note_id=target.note_id,
+        field="reading",
+        op=OP_FILL,
+        old_value="",
+        new_value=derived,
+        source_note_id=None,
+        default_checked=bool(cfg.get("replaces_autocheck", True)),
+        badges=("reading-derived-from-furigana",),
+    )
+
+
 _ANKI_CONTROL_TAGS = frozenset({"marked", "leech"})
 
 
@@ -2340,12 +2367,44 @@ def build_plan(
     # the Expression rewrite must not land in the same run as them.
     word_fields = frozenset({*cfg.get("word_fill_fields", ()), "Expression"})
 
-    groups = word_groups(records)
+    target_keys = {
+        word_key(t.get("Expression"), t.get("reading"), t.get("furigana")) for t in scope
+    } - {None}
+    if len(target_keys) <= 100:
+        groups: dict[tuple[str, str], list[NoteRecord]] = {}
+        if target_keys:
+            for r in records:
+                k = word_key(r.get("Expression"), r.get("reading"), r.get("furigana"))
+                if k is not None and k in target_keys:
+                    groups.setdefault(k, []).append(r)
+    else:
+        groups = word_groups(records)
+
     parent_usage: dict[int, int] = {}
     scene_dimension = bool(cfg.get("batch_scene_propagation", True))
     scene_fill_fields = tuple(cfg.get("scene_fill_fields", DEFAULT_SCENE_FILL_FIELDS))
     scene_replace_fields = tuple(cfg.get("scene_replace_fields", DEFAULT_SCENE_REPLACE_FIELDS))
-    parent_index = SceneParentIndex.from_parents(parents_by_id, cache) if scene_dimension else None
+
+    parent_index = None
+    if scene_dimension and parents_by_id:
+        targets_with_gap = [
+            t
+            for t in scope
+            if any(is_empty(t.get(f)) for f in scene_fill_fields)
+            or ("Source" in scene_replace_fields and is_blob_source(t.get("Source")))
+        ]
+        if targets_with_gap:
+            sorted_pids = sorted(parents_by_id)
+            candidate_pids: set[int] = set()
+            for t in targets_with_gap:
+                lo = bisect.bisect_left(sorted_pids, t.note_id - window_ms)
+                hi = bisect.bisect_right(sorted_pids, t.note_id + window_ms)
+                candidate_pids.update(sorted_pids[lo:hi])
+            if len(candidate_pids) < len(parents_by_id):
+                candidate_parents = {pid: parents_by_id[pid] for pid in candidate_pids}
+                parent_index = SceneParentIndex.from_parents(candidate_parents, cache)
+            else:
+                parent_index = SceneParentIndex.from_parents(parents_by_id, cache)
 
     for target in scope:
         if optout in target.tags:
@@ -2418,6 +2477,10 @@ def build_plan(
             group = groups.get(key, [])
             if len(group) > 1:
                 target_writes.extend(_word_writes_for(target, group, cfg))
+        if not any(w.field == "reading" for w in target_writes):
+            self_reading = _self_reading_write(target, cfg)
+            if self_reading is not None:
+                target_writes.append(self_reading)
         # Empty-glossary shells (Yomitan `<ol></ol>`) render as nothing and are
         # cleared; definitions are never copied from sibling cards.
         target_writes.extend(

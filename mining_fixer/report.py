@@ -105,11 +105,13 @@ _BADGE_EXPLANATIONS: dict[str, str] = {
     "dictionary-version-may-differ": "Value may come from a different dictionary version",
     "yomitan-gloss": "Value sourced from a Yomitan gloss",
     "single-source-user-authored": "Only one sibling source — user-authored content",
+    "reading-derived-from-furigana": "Reading derived from note's own furigana",
     # Repair rules (applied to Sentence)
     "strip-arrows": "Continuation arrows stripped from line tails",
     "flatten-div-blocks": "HTML div blocks flattened to line breaks",
     "join-speaker-lines": "Speaker-prefixed lines joined",
     "strip-dash": "Stray horizontal bars stripped from the Sentence field",
+    "strip-nbsp": "Non-breaking spaces (&nbsp;) stripped",
 }
 
 

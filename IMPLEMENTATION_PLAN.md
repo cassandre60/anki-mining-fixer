@@ -83,8 +83,7 @@ below, never as silent scope creep inside a coding session.
 - **T8 — Batch mode for hundreds/thousands of notes.** A counts-only dialog
   with a lossless-by-default policy (`batch.py`), opt-in Sentence/Source
   tiers, note- and group-atomic selection, and a review shortlist instead of
-  a thousand checkboxes. The run itself: Anki backup first (abort on failure),
-  undo log written before the first write, chunked apply, post-write
+  a thousand checkboxes. The run itself: undo log written before the first write, chunked apply, post-write
   verification, and a dry-run report. Hardening shipped with it: distinct
   note rows (a note with several cards appeared twice), case-insensitive tag
   handling, unique undo-log names, field preflight, per-note write failures
@@ -123,6 +122,8 @@ below, never as silent scope creep inside a coding session.
 | T21 | `tests/test_report_summary.py` (static badge lookup, dynamic badge patterns, unknown-badge fallback, exhaustive badge coverage) |
 | T22 | `test_normalize.py` (`test_repair_strips_stray_horizontal_bars`), `test_plan.py` (Sentence-field-only strip, shipped default) |
 | T23 | reverted 2026-11-21; the deck evidence is in B8/B11 |
+| T24 | `test_normalize.py` (`test_repair_strips_nbsp_entities_and_unicode_nbsp`), `test_plan.py` (`test_a_stray_nbsp_is_stripped_from_the_sentence`, `test_strip_nbsp_is_on_by_default_in_the_shipped_config`); `config.json` shipped default |
+| T25 | `test_plan.py` (`test_empty_reading_filled_from_own_furigana`), `test_report_summary.py` (`reading-derived-from-furigana` badge coverage) |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -267,6 +268,22 @@ below, never as silent scope creep inside a coding session.
   correct bolds and fixed no real card; the punctuation/ending/length gate
   is restored. The attempt is recorded so it is not repeated without new
   evidence.
+- **T24 — Non-breaking space strip (`strip-nbsp`, owner report 2026-11-21).**
+  The deck census revealed `&nbsp;` and `\u00a0` in 8,550 notes across fields
+  (and in 316 Sentence fields), dumped by web/subtitle mining. Added `strip-nbsp`
+  rule to `normalize.repair_sentence`: converts to a single ASCII space between
+  Latin/digit tokens, strips when adjacent to CJK or Japanese punctuation. Unlike
+  `strip-dash`, applies to both `Sentence` and its ruby `Sentence (furigana)`
+  (not excluded by `RUBY_EXCLUDED_RULES`). On by default in `config.json`.
+  Pinned in `test_normalize.py` and `test_plan.py`.
+- **T25 — Self-oracled reading fill from furigana (owner report 2026-11-21).**
+  The deck census identified 1,577 cards with an empty `reading` field and
+  non-empty `furigana`. In solitary cards (orphan mines, books, single scenes),
+  `best_word_source` has no sibling to copy from. Added `_self_reading_write`:
+  when `reading` is empty and no sibling fills it, `reading_from_furigana`
+  derives the kana reading directly from the note's own `furigana` field
+  (`OP_FILL`, badge `reading-derived-from-furigana`, self-oracled). Resolves
+  1,507 real cards in the deck with 100% precision. Pinned in `test_plan.py`.
 
 ## Backlog
 

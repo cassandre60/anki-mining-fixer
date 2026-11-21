@@ -13,7 +13,8 @@
     "flatten-div-blocks",
     "strip-arrows",
     "join-speaker-lines",
-    "strip-dash"
+    "strip-dash",
+    "strip-nbsp"
   ],
   "batch_regenerate_furigana": true,
   "batch_repair_expression": true,

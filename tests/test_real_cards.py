@@ -60,7 +60,7 @@ CFG = {
     "batch_replace_source": True,
     "batch_scene_propagation": True,
     "batch_repair_sentence": True,
-    "sentence_repair_rules": ["strip-arrows", "strip-dash"],
+    "sentence_repair_rules": ["strip-arrows", "strip-dash", "strip-nbsp"],
     "batch_regenerate_furigana": True,
     "definition_fields": ["Definition", "Extended definition"],
     "scene_fill_fields": ["Sentence Audio", "Picture", "Sentence (furigana)", "Translation"],

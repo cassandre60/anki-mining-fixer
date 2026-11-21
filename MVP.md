@@ -30,7 +30,7 @@ the collection never touched by anything the dialog did not show.
 | Undo of the last run | `applier.decide_undo`, `__init__._on_undo` | real-collection run |
 | Browser selection as the target scope | `plan.scope_from_selection`, `collection_io.plan_preview`, `__init__._on_browser_context_menu` | `test_scope_from_selection_*`, `test_browser_context_menu_*`, selection run on a real copy |
 | Source confidence: divergent or far scene sources never auto-checked | `plan._scene_writes_for` (`divergent-parents`, `far-from-source`) | `test_divergent_scene_sources_*`, `test_a_far_scene_source_*`, `test_an_identical_sentence_*` |
-| Batch mode: lossless-by-default policy, text-unit atomicity, source-confidence blocking, no decision queue, backup, log-before-write, chunked apply, post-write verification, dry run | `batch.py`, `collection_io.apply_batch`, `batch_dialog.py` | `tests/test_batch.py`, `tests/test_invariants.py`, 1000-note run on a real copy |
+| Batch mode: lossless-by-default policy, text-unit atomicity, source-confidence blocking, no decision queue, log-before-write, chunked apply, post-write verification, dry run | `batch.py`, `collection_io.apply_batch`, `batch_dialog.py` | `tests/test_batch.py`, `tests/test_invariants.py`, 1000-note run on a real copy |
 | Audit `.apkg` builder (dry runs) | `scripts/build_audit_package.py` | rebuilt package verified to the note |
 | CI gate (ruff + suite) | `.github/workflows/tests.yml` | green on every push |
 
