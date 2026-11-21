@@ -2,7 +2,7 @@
 """Audit a whole selection for the defects the author keeps finding by hand.
 
 Copy-free for the collection (it works on a temporary copy), read-only for
-the profile, and general: it does not test named cards, it *measures* four
+the profile, and general: it does not test named cards, it *measures* six
 invariants over every card in scope, after applying a run to the copy.
 
     python3 scripts/scene_audit.py --profile-dir "<Anki profile dir>" --last 300
@@ -20,6 +20,13 @@ Invariants (a card fails if any is broken):
      state until a pass writes nothing), then the same scope is re-planned —
      the residual must be **0 rows**. Any row is work the fixpoint should
      have absorbed (a cross-run cascade or a misordered step). Release gate.
+  G  **no fragment under borrowed audio** (QUALITY Q-A10): an independent
+     referee over the post-run field values — no `build_plan` involved. A
+     card whose `Sentence Audio` is byte-identical to a sibling's but whose
+     `Sentence` is a strict fragment of that sibling's block was abandoned
+     mid-fix. Class F cannot see it: once the audio is present the planner
+     considers the card complete and reports zero residual rows, so the gate
+     would referee itself. Ground truth, not planner opinion.
 
 Output is a count per class with examples. Zero on every line means the
 corpus is coherent; the author's reported cards would appear under B, C, D.
@@ -76,6 +83,38 @@ def _shares_word_material(span: str, spelling: str) -> bool:
 
 
 BOLD_RE = re.compile(r"<b>(.*?)</b>", re.DOTALL)
+
+
+def _fragment_under_shared_audio(
+    scope: list[int], fields: dict[int, dict[str, str]]
+) -> dict[int, int]:
+    """Independent referee for Q-A10: abandoned cards, keyed to their sibling.
+
+    Reads only post-run field values — it never calls ``build_plan``, so it
+    cannot inherit the planner's blind spot. A card that borrowed a sibling's
+    scene audio but still carries a strict fragment of that sibling's
+    sentence was left half-fixed: the audio fill landed while the guarded
+    sentence expansion did not. Pure and cheap (one group-by, one substring
+    check per shared-audio pair).
+    """
+    audio_to_notes: dict[str, list[int]] = collections.defaultdict(list)
+    for note_id in scope:
+        for ref in SOUND_RE.findall(fields[note_id].get("Sentence Audio") or ""):
+            audio_to_notes[ref].append(note_id)
+
+    abandoned: dict[int, int] = {}
+    for note_id in scope:
+        own = strip_renderable(fields[note_id].get("Sentence") or "")
+        if not own:
+            continue
+        for ref in SOUND_RE.findall(fields[note_id].get("Sentence Audio") or ""):
+            for sibling_id in audio_to_notes[ref]:
+                if sibling_id == note_id or note_id in abandoned:
+                    continue
+                sibling = strip_renderable(fields[sibling_id].get("Sentence") or "")
+                if sibling and sibling != own and own in sibling:
+                    abandoned[note_id] = sibling_id
+    return abandoned
 
 
 def main() -> int:
@@ -187,6 +226,11 @@ def main() -> int:
         for note_id in scope:
             by_sentence[strip_renderable(fields[note_id].get("Sentence") or "")].append(note_id)
 
+        # Class G: referee the *state*, not the planner's opinion of it. Class
+        # F above can pass with zero rows while a card is still half-fixed,
+        # because the borrowed audio hides the owed expansion from planning.
+        abandoned = _fragment_under_shared_audio(scope, fields)
+
         violations: collections.Counter[str] = collections.Counter()
         examples: dict[str, list[str]] = collections.defaultdict(list)
         # Convergence gate (QUALITY Q-A2, "one run is the whole fix"): re-plan
@@ -211,6 +255,13 @@ def main() -> int:
                 f"{len(second.rows)} rows on {len({w.note_id for w in second.rows})} "
                 f"cards: {dict(by_field)}"
             )
+        if abandoned:
+            name = "G fragment sentence under borrowed audio (Q-A10)"
+            violations[name] = len(abandoned)
+            for note_id, sibling_id in list(abandoned.items())[:4]:
+                word = (fields[note_id].get("Expression") or "")[:14]
+                examples[name].append(f"{word}: audio of note {sibling_id}, fragment sentence")
+
         for note_id in scope:
             card = fields[note_id]
             sentence = card.get("Sentence") or ""

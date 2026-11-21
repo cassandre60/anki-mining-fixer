@@ -19,6 +19,7 @@ every asserted write must be byte-identical to the manual fix.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -124,6 +125,65 @@ CFG = {
     "notes_autocheck": False,
     "optout_tag": "no-autofill",
 }
+
+
+# Adversarial shapes from issue #6. The golden fixtures above are all
+# pre-Apply and have a parent whose bold marks *its own* word. Both shapes
+# below were absent, which is why a fragile fragment matcher looked green.
+#  - FOREIGN_BOLD: the sibling bolds 無銭 inside the fragment the child
+#    tests with 飲食, and the tested word occurs twice in the block.
+#  - POST_PARTIAL_APPLY: the child after a run whose checked fills landed
+#    (audio/picture/source) but whose guarded sentence expansion did not.
+FOREIGN_BOLD_SIBLING_ID = 10_000_000
+FOREIGN_BOLD_CHILD_ID = 10_000_060
+FOREIGN_BOLD_AUDIO = " [sound:scene.webm] "
+FOREIGN_BOLD_FULL_SENTENCE = (
+    "(ドアが開く音)(警官) お待たせしました｡<br>"
+    "おかあさんが 人形町の飲食店で<br><b>無銭</b>飲食で逮捕されました｡"
+)
+FOREIGN_BOLD_PLAIN_SENTENCE = re.sub(r"</?b>", "", FOREIGN_BOLD_FULL_SENTENCE)
+FOREIGN_BOLD_FRAGMENT = "無銭<b>飲食</b>で逮捕されました｡"
+FOREIGN_BOLD_FRAGMENT_RUBY = "無銭飲食[むせんいんしょく]で 逮捕[たいほ]されました｡"
+
+
+def foreign_bold_sibling():
+    return NoteRecord(
+        note_id=FOREIGN_BOLD_SIBLING_ID,
+        notetype_id=1,
+        fields={
+            "Expression": "無銭飲食",
+            "reading": "むせんいんしょく",
+            "Sentence": FOREIGN_BOLD_FULL_SENTENCE,
+            "Sentence Audio": FOREIGN_BOLD_AUDIO,
+            "Picture": '<img src="scene.jpeg">',
+            "Source": "Show.mp4 (6m53s)",
+            "Sentence (furigana)": FOREIGN_BOLD_PLAIN_SENTENCE,
+            "cloze-body": "無銭飲食",
+        },
+        tags=frozenset({"asbplayer"}),
+    )
+
+
+def foreign_bold_child(*, post_partial_apply: bool = False):
+    return NoteRecord(
+        note_id=FOREIGN_BOLD_CHILD_ID,
+        notetype_id=1,
+        fields={
+            "Expression": "飲食",
+            "reading": "いんしょく",
+            "Sentence": FOREIGN_BOLD_FRAGMENT,
+            "Sentence Audio": FOREIGN_BOLD_AUDIO if post_partial_apply else "",
+            "Picture": '<img src="scene.jpeg">' if post_partial_apply else "",
+            "Source": "Show.mp4 (6m53s)" if post_partial_apply else "blob:https://asbplayer/xyz",
+            "Sentence (furigana)": (FOREIGN_BOLD_FRAGMENT_RUBY if post_partial_apply else ""),
+            "cloze-prefix": "無銭",
+            "cloze-body": "飲食",
+            "cloze-suffix": "で逮捕されました｡",
+        },
+        tags=frozenset(
+            {"asbplayer", "auto-filled", "yomitan"} if post_partial_apply else {"yomitan"}
+        ),
+    )
 
 
 def writes_for(plan, note_id):

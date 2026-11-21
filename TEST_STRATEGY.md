@@ -130,7 +130,29 @@ not have and must never be given.
   no-op) and in the property tests (re-running a plan is a no-op); the audit
   extends it from a fixed fixture to a whole selection, because a cross-run
   cascade only appears *across* cards. Measured 0 rows on the newest 300
-  (2026-11-17). Never weaken it.
+  (2026-11-17). Never weaken it — but do not trust it alone: Q-A10 showed a
+  card can be half-fixed while class F honestly reports zero rows, because
+  re-planning asks the planner to referee itself. Class **G** below is the
+  independent state check.
+- **A skipped expansion stays reachable** (QUALITY Q-A10, owner report
+  2026-11-21, 飲食 note 1795027901231): `tests/test_plan.py` asserts that a
+  parent bolding a different word (「`<b>無銭</b>飲食で…`」) still produces a
+  checked expansion with the bold retargeted to the card's word, and that a
+  card whose audio was filled from a sibling but whose sentence stayed a
+  fragment is re-expanded on the next run — followed by a fixpoint check (the
+  run after that writes nothing). All three cases fail on the pre-fix planner.
+- **No silent abandonment under partial apply** (QUALITY Q-A11):
+  `tests/test_plan.py::test_checked_only_apply_keeps_guarded_work_reachable`
+  is a metamorphic check — apply only the plan's checked writes to a card,
+  re-plan, and require every previously guarded field to still be proposed.
+  It fails on the pre-fix planner with `guarded Sentence vanished`. The
+  independent referee `scripts/scene_audit.py::_fragment_under_shared_audio`
+  (class **G**) reads post-run field values without importing `build_plan`
+  and flags any card whose audio is byte-identical to a sibling's while its
+  sentence is a strict fragment of that sibling's block; `tests/test_scene_audit_referee.py`
+  pins it (stuck card flagged, fixed card and unrelated audio quiet). The
+  adversarial shapes live once in `tests/test_golden_scene.py`
+  (`foreign_bold_sibling`, `foreign_bold_child(post_partial_apply=True)`).
 - **Word-anchored scene recovery** (QUALITY Q-D14) is pinned in
   `tests/test_plan.py`: a mis-mined sentence is recovered from the word's
   own spellings, the tighter of two nested same-episode blocks wins, the
@@ -261,8 +283,8 @@ expected counts are:
 
 | Environment | Result |
 |---|---|
-| Author's machine (`python3 -m pytest`, Anki present) | **303 passed** |
-| CI / a venv without Anki | **301 passed, 2 skipped** |
+| Author's machine (`python3 -m pytest`, Anki present) | **312 passed** |
+| CI / a venv without Anki | **310 passed, 2 skipped** |
 
 Both are green; the difference is exactly two self-skipping import checks
 (the dialog modules need a real `aqt`).

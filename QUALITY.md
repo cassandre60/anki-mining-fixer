@@ -405,6 +405,32 @@ first, with the reason.
   Browser flushes its stale editor contents on `closeEvent` (`saveNow()`),
   silently overwriting and reverting the applied fix to its pre-fix values
   (the author's ばあちゃん defect).
+- **Q-A10 — A skipped guarded expansion never becomes unreachable.** A scene
+  fill may supply a sibling's `Sentence Audio` while the paired `Sentence`
+  expansion is guarded and left unchecked (the 飲食 card, 2026-11-21). The
+  card then owns scene audio but still carries a fragment sentence, and the
+  guard at `_scene_writes_for` would keep every later run from proposing the
+  expansion. Such a card is detected by `_shared_audio_parent`: its audio
+  file is byte-identical to the sibling's while its sentence is a strict
+  fragment of the sibling's full block. It stays expandable, the expansion
+  writes the full block with the bold retargeted to *this* card's word, and
+  the following run is a no-op. Related: `_fragment_anchored_sentence`
+  ignores the parent's bold markup when matching the cloze fragment, so a
+  sibling bolding a different word cannot force the expansion into the
+  guarded state in the first place. Measured independently of the planner by
+  `scripts/scene_audit.py` class **G**, which reads post-run field values only
+  and fails on a card holding a strict fragment under a sibling's audio;
+  class F (residual rows == 0) cannot see this state.
+- **Q-A11 — No silent abandonment under partial apply.** A guarded row is an
+  explicit statement "this card needs this write, but a human must confirm
+  it". If a run writes only the checked rows of the same plan, the skipped
+  work is still owed: the next run must still propose every guarded field
+  (or the field must now hold the intended value). Eligibility must never be
+  destroyed by a write another op in the same bundle made — the 飲食 bug was
+  exactly that: the audio fill removed the expansion's only trigger. Pinned
+  by a metamorphic test that applies only checked writes, re-plans, and
+  asserts each previously guarded field is still proposed (Q-A2's fixpoint
+  gate alone is insufficient because it asks the planner to referee itself).
 
 ## Performance & Latency
 

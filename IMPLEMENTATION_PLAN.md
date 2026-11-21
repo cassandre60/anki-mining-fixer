@@ -287,6 +287,29 @@ below, never as silent scope creep inside a coding session.
   derives the kana reading directly from the note's own `furigana` field
   (`OP_FILL`, badge `reading-derived-from-furigana`, self-oracled). Resolves
   1,507 real cards in the deck with 100% precision. Pinned in `test_plan.py`.
+- **T29 — Skipped sentence expansion stays reachable (Issue #6, owner report
+  2026-11-21).** The 飲食 card's sibling bolds `無銭` inside the fragment and
+  the tested word `飲食` occurs twice in the scene block, so
+  `_fragment_anchored_sentence` could not match the cloze fragment and the
+  expansion shipped guarded. The checked audio fill landed, the guarded
+  expansion did not, and the `Sentence Audio` guard then made every later run
+  report `nothing-to-fill`. The helper now ignores parent bold markup when
+  matching, and `_shared_audio_parent` keeps a card expandable when its audio
+  is byte-identical to a sibling's but its sentence is still a strict fragment
+  of that sibling's block (QUALITY Q-A10). Pinned in `test_plan.py` by
+  `test_expansion_is_checked_when_parent_bolds_a_different_word`,
+  `test_skipped_expansion_is_recovered_on_the_next_run`, and the updated
+  `test_expansion_uses_the_fragment_when_anchor_not_unique`.
+- **T30 — Independent audit referee and partial-apply invariant (follow-up to
+  T29).** Class F re-plans to check convergence, which let the 飲食 card pass
+  with zero residual rows because the planner had gone blind. `scene_audit.py`
+  now has class G: `_fragment_under_shared_audio` inspects post-run field
+  values directly (no `build_plan` import) and reports a card holding a strict
+  fragment of a sibling's sentence under that sibling's audio. QUALITY Q-A11
+  generalizes T29 into "no silent abandonment under partial apply", pinned by
+  a metamorphic test that applies only checked writes and re-plans. The
+  adversarial shapes (foreign bold, post-partial-apply) are canonical fixtures
+  in `test_golden_scene.py` instead of inline test data.
 
 ## Backlog
 
