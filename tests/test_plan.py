@@ -2637,6 +2637,18 @@ def test_config_field_and_autocheck_overrides_are_respected():
     assert by_field["Notes"].default_checked is True
 
 
+def test_scene_fill_empty_source():
+    parent = scene(1, "あしたの朝刊の見出しはこうニャ！", source="Show.mp4 (10m00s)")
+    child = scene(2, "あしたの朝刊の見出しはこうニャ！", source="")
+    plan = build_plan([parent, child], CFG, scope_note_ids=[2])
+    src_write = next((w for w in plan.writes if w.field == "Source"), None)
+    assert src_write is not None
+    assert src_write.op == OP_FILL
+    assert src_write.old_value == ""
+    assert src_write.new_value == "Show.mp4 (10m00s)"
+    assert "fills-empty-source" in src_write.badges
+
+
 def test_bold_repair_recognizes_inflected_span_with_morph_tokenizer():
     # Issue #1: 淀む (reading よどむ) with existing bold around よどん
     target = rec(

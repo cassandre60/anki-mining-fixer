@@ -101,6 +101,7 @@ _BADGE_EXPLANATIONS: dict[str, str] = {
     "tags-union-never-removes": "Tags merged from sources — no tags were removed",
     # Source
     "replaces-blob-url": "Source field filled, replacing a blob URL",
+    "fills-empty-source": "Source field filled from parent",
     # Word-level source provenance
     "dictionary-version-may-differ": "Value may come from a different dictionary version",
     "yomitan-gloss": "Value sourced from a Yomitan gloss",

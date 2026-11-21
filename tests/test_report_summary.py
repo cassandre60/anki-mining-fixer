@@ -346,6 +346,7 @@ def test_all_known_badges_have_explanations():
         "tags-union-never-removes",
         # Source
         "replaces-blob-url",
+        "fills-empty-source",
         # Word-level provenance
         "dictionary-version-may-differ",
         "yomitan-gloss",

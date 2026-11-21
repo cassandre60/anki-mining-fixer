@@ -126,6 +126,7 @@ below, never as silent scope creep inside a coding session.
 | T25 | `test_plan.py` (`test_empty_reading_filled_from_own_furigana`), `test_report_summary.py` (`reading-derived-from-furigana` badge coverage) |
 | T26 | `test_plan.py` (`test_bold_repair_skips_the_shell_only_definition_listening_shape`); closes B11 |
 | T27 | `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`); QUALITY Q-D11 user-context protection |
+| T28 | `test_plan.py` (`test_scene_fill_empty_source`), `test_report_summary.py` (`fills-empty-source` badge coverage) |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -336,6 +337,14 @@ below, never as silent scope creep inside a coding session.
   speaker tags omitted from the front (`ruby_speaker and not sent_speaker`) or
   encloses the front sentence, the field is protected and never overwritten.
   Pinned in `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`).
+- **T28 — Fill empty Source from verified scene parent (owner report 2026-11-21).**
+  Cards mined without an asbplayer blob (or whose Source was empty) previously fell
+  through the cracks: `replace_source` only fired when `is_blob_source` was true,
+  and `scene_fill_fields` omitted Source. A card with an empty Source sharing a scene
+  with a timestamped episode parent received audio and picture but was denied the Source.
+  Updated `_fillable_and_payload` in `matching.py` and `_scene_writes_for` in `plan.py`
+  to fill empty Source (`is_empty(candidate.get("Source"))`) with `OP_FILL` and badge
+  `fills-empty-source`. Pinned in `test_plan.py` (`test_scene_fill_empty_source`).
 - **B9 — Dictionary spelling for kana expressions** (owner ask 2026-11-16;
   text in [`FUTURE_FEATURES.md`](FUTURE_FEATURES.md) §F2, design in
   [`BULK_FIX.md`](BULK_FIX.md) dimension 4 / slice 4). Rewrite a kana-only

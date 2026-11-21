@@ -356,8 +356,9 @@ def _fillable_and_payload(
     if (
         "Source" in replace_fields
         and "Source" not in never_copy
-        and is_blob_source(candidate.get("Source"))
+        and (is_blob_source(candidate.get("Source")) or is_empty(candidate.get("Source")))
         and not is_blob_source(parent.get("Source"))
+        and not is_empty(parent.get("Source"))
     ):
         payload.append(("Source", parent.get("Source")))
         count += 1

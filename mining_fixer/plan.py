@@ -1795,16 +1795,19 @@ def _scene_writes_for(
     # Fill ops: only truly empty fields, only values the parent actually has.
     for fname, value in best_payload:
         if fname == "Source":
+            is_empty_src = is_empty(candidate.get("Source"))
+            op = OP_FILL if is_empty_src else OP_REPLACE_SOURCE
+            src_badge = "fills-empty-source" if is_empty_src else "replaces-blob-url"
             writes.append(
                 PlannedWrite(
                     note_id=candidate.note_id,
                     field="Source",
-                    op=OP_REPLACE_SOURCE,
-                    old_value=candidate.get("Source"),
+                    op=op,
+                    old_value=candidate.get("Source") or "",
                     new_value=value,
                     source_note_id=parent.note_id,
                     default_checked=bool(cfg.get("replaces_autocheck", True)) and trusted,
-                    badges=tuple(["replaces-blob-url", *context_badges]),
+                    badges=tuple([src_badge, *context_badges]),
                     window_ms=gap_ms,
                     group_id=group_id,
                 )
@@ -2408,7 +2411,10 @@ def build_plan(
             t
             for t in scope
             if any(is_empty(t.get(f)) for f in scene_fill_fields)
-            or ("Source" in scene_replace_fields and is_blob_source(t.get("Source")))
+            or (
+                "Source" in scene_replace_fields
+                and (is_blob_source(t.get("Source")) or is_empty(t.get("Source")))
+            )
         ]
         if targets_with_gap:
             sorted_pids = sorted(parents_by_id)
@@ -2431,7 +2437,10 @@ def build_plan(
         scene_writes, reason = [], None
         has_scene_gap = scene_dimension and (
             any(is_empty(target.get(f)) for f in scene_fill_fields)
-            or ("Source" in scene_replace_fields and is_blob_source(target.get("Source")))
+            or (
+                "Source" in scene_replace_fields
+                and (is_blob_source(target.get("Source")) or is_empty(target.get("Source")))
+            )
         )
         # Incomplete cards (missing audio/picture/ruby/translation or blob Source)
         # find their scene parent in creation order (session clustering).
