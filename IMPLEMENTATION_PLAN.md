@@ -124,6 +124,7 @@ below, never as silent scope creep inside a coding session.
 | T23 | reverted 2026-11-21; the deck evidence is in B8/B11 |
 | T24 | `test_normalize.py` (`test_repair_strips_nbsp_entities_and_unicode_nbsp`), `test_plan.py` (`test_a_stray_nbsp_is_stripped_from_the_sentence`, `test_strip_nbsp_is_on_by_default_in_the_shipped_config`); `config.json` shipped default |
 | T25 | `test_plan.py` (`test_empty_reading_filled_from_own_furigana`), `test_report_summary.py` (`reading-derived-from-furigana` badge coverage) |
+| T26 | `test_plan.py` (`test_bold_repair_skips_the_shell_only_definition_listening_shape`); closes B11 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -319,15 +320,10 @@ below, never as silent scope creep inside a coding session.
   detection (B11), not clause detection. The punctuation/ending/length gate
   stays.
 - **B11 — Listening cards with shell-only definitions are misclassified.**
-  `plan._is_listening` tests `is_empty(Definition)`, so a definition that
-  renders as nothing but is not blank — `<br/>`, `<div></div>`,
-  `<ol></ol>` — counts as a real gloss and the card is treated as a word
-  card. 216 cards in the configured deck are in this state (e.g. 領域展開,
-  ばいい, and the owner's 1785411868821), so their
-  placeholder/sentence `Expression` reaches the bold repair and other
-  dimensions. Fix: treat a shell-only definition as empty
-  (`is_empty(v) or is_empty_glossary_shell(v)`) on both definition fields;
-  pin 1785411868821 and a 領域展開 card as skipped-as-listening. Not started.
+  Shipped as T26: `plan._is_listening` now treats shell-only definitions as empty
+  (`is_empty(v) or is_empty_glossary_shell(v)`) on both definition fields.
+  Resolves the 216 misclassified cards in the configured deck; pinned in
+  `test_plan.py`.
 - **B9 — Dictionary spelling for kana expressions** (owner ask 2026-11-16;
   text in [`FUTURE_FEATURES.md`](FUTURE_FEATURES.md) §F2, design in
   [`BULK_FIX.md`](BULK_FIX.md) dimension 4 / slice 4). Rewrite a kana-only

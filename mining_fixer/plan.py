@@ -355,9 +355,13 @@ def _is_listening(target: NoteRecord) -> bool:
     word_audio = target.get("Word Audio")
     if tag and not (is_empty(sentence_audio) and is_empty(word_audio)):
         return True
+    def_val = target.get("Definition")
+    ext_val = target.get("Extended definition")
+    def_empty = is_empty(def_val) or is_empty_glossary_shell(def_val)
+    ext_empty = is_empty(ext_val) or is_empty_glossary_shell(ext_val)
     return (
-        is_empty(target.get("Definition"))
-        and is_empty(target.get("Extended definition"))
+        def_empty
+        and ext_empty
         and is_empty(target.get("Frequency"))
         and not is_empty(sentence_audio)
     )

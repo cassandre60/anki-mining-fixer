@@ -546,6 +546,20 @@ def test_bold_repair_skips_the_no_gloss_listening_shape():
     assert not [w for w in plan.writes if w.op == OP_BOLD_CLOZE_WORD]
 
 
+def test_bold_repair_skips_the_shell_only_definition_listening_shape():
+    # Backlog B11: Yomitan empty shells (<ol></ol>) render nothing in the template,
+    # so the card is rendered as audio-only listening.
+    f = dict(CHILD.fields)
+    f["Sentence"] = "先生は今 診察中ですので"
+    f["Definition"] = '<div class="yomitan-glossary"><ol></ol></div>'
+    f["Extended definition"] = ""
+    f["Frequency"] = ""
+    f["Sentence Audio"] = " [sound:scene.webm] "
+    c = rec(CHILD.note_id, f, tags=("yomitan",))
+    plan = build_plan([c], CFG, scope_note_ids=[CHILD.note_id])
+    assert not [w for w in plan.writes if w.op == OP_BOLD_CLOZE_WORD]
+
+
 def test_frequency_without_glosses_is_not_listening():
     # The template deliberately shows the normal sentence for those cards.
     f = dict(CHILD.fields)
