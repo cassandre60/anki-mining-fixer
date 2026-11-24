@@ -72,10 +72,14 @@ def test_replaces_only_approved_ops():
 
 
 def test_expansion_guard_when_fragment_not_recoverable():
+    # The child stores no cloze-* and its word is not unique in the parent
+    # block (the parent sentence carries 診察 twice), so no anchor exists;
+    # the fragment is not reconstructible either. The row stays guarded.
     child = dict(CHILD.fields)
-    child["cloze-prefix"] = ""  # fragment no longer reconstructible
+    child["cloze-prefix"] = ""
     child["cloze-body"] = ""
     child["cloze-suffix"] = ""
+    child["Expression"] = ""
     c = rec(CHILD.note_id, child, tags=("yomitan",))
     plan = build_plan([PARENT, c], CFG, scope_note_ids=[CHILD.note_id])
     rows = [w for w in plan.writes if w.note_id == CHILD.note_id and w.field == "Sentence"]
@@ -143,6 +147,89 @@ def test_skipped_expansion_is_recovered_on_the_next_run():
     assert not [w for w in plan2.writes if w.note_id == child.note_id and w.field == "Sentence"]
 
 
+def test_expansion_inherits_hand_corrected_sentence_when_cloze_body_empty():
+    # Issue #10: A hand-corrected sibling card (戦闘不能, note 1737313442998)
+    # has reflowed Sentence and speaker tag. The sibling card (不能, note
+    # 1737313493933) has empty cloze-* fields. It must anchor on its Expression
+    # (不能), retarget the bold to its own word, copy the corrected ruby, and
+    # ship checked.
+    parent_sent = "（レロ･ロー）挑戦者チームがすべて<b>戦闘不能</b><br>もしくは失格となりました"
+    parent_ruby = (
+        "（レロ･ロー） 挑戦者[ちょうせんしゃ]チームが すべて "
+        "戦闘[せんとう] 不能[ふのう]<br>もしくは 失格[しっかく]となりました"
+    )
+
+    child_sent = "挑戦者チームが<br>すべて戦闘<b>不能</b><br>もしくは失格となりました"
+    child_ruby = (
+        "（レロ･ロー） 挑戦者[ちょうせんしゃ]チームが<br>すべて "
+        "戦闘[せんとう] 不能[ふのう]<br>もしくは 失格[しっかく]となりました"
+    )
+
+    parent = rec(
+        1737313442998,
+        {
+            "Expression": "戦闘不能",
+            "reading": "せんとうふのう",
+            "Sentence": parent_sent,
+            "Sentence (furigana)": parent_ruby,
+            "Sentence Audio": "[sound:kami_s01e05.mp3]",
+            "Picture": "<img src='kami_s01e05.jpg'>",
+            "Source": "[Judas] Kami no Tou - S01E05.mkv (9m07s)",
+            "cloze-body": "",
+        },
+    )
+
+    child = rec(
+        1737313493933,
+        {
+            "Expression": "不能",
+            "reading": "ふのう",
+            "Sentence": child_sent,
+            "Sentence (furigana)": child_ruby,
+            "Sentence Audio": "[sound:kami_s01e05.mp3]",
+            "Picture": "<img src='kami_s01e05.jpg'>",
+            "Source": "[Judas] Kami no Tou - S01E05.mkv (9m07s)",
+            "cloze-body": "",
+        },
+    )
+
+    plan = build_plan([parent, child], CFG, scope_note_ids=[child.note_id])
+    sent_writes = [
+        w
+        for w in plan.writes
+        if w.note_id == child.note_id and w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE
+    ]
+    assert len(sent_writes) == 1
+    w = sent_writes[0]
+    assert w.default_checked
+    assert "bold-retargeted-to-expression" in w.badges
+    expected_sent = "（レロ･ロー）挑戦者チームがすべて戦闘<b>不能</b><br>もしくは失格となりました"
+    assert w.new_value == expected_sent
+
+    furi_writes = [
+        w
+        for w in plan.writes
+        if w.note_id == child.note_id
+        and w.field == "Sentence (furigana)"
+        and w.op == OP_EXPAND_SENTENCE
+    ]
+    assert len(furi_writes) == 1
+    assert furi_writes[0].default_checked
+    assert furi_writes[0].new_value == parent_ruby
+
+    # Fixpoint (Q-A2): a second plan pass writes nothing
+    fixed_child = rec(
+        child.note_id,
+        {
+            **child.fields,
+            "Sentence": w.new_value,
+            "Sentence (furigana)": furi_writes[0].new_value,
+        },
+    )
+    pass2 = build_plan([parent, fixed_child], CFG, scope_note_ids=[child.note_id])
+    assert not pass2.writes
+
+
 def test_checked_only_apply_keeps_guarded_work_reachable():
     """Q-A11: a guarded row skipped by a run is still owed on the next one.
 
@@ -150,11 +237,16 @@ def test_checked_only_apply_keeps_guarded_work_reachable():
     previously guarded field must still be proposed. The 飲食 incident broke
     exactly this — the checked audio fill destroyed the guarded expansion's
     only trigger, so the next run reported nothing-to-fill.
+
+    The guarded expansion is produced by the golden child with its cloze
+    fields and Expression blanked (no anchor remains: the reading the
+    word-less card falls back to does not occur in the parent block).
     """
     fields = dict(CHILD.fields)
     fields["cloze-prefix"] = ""
     fields["cloze-body"] = ""
     fields["cloze-suffix"] = ""
+    fields["Expression"] = ""
     child = rec(CHILD.note_id, fields, tags=("yomitan",))
     first = build_plan([PARENT, child], CFG, scope_note_ids=[child.note_id])
     checked = [w for w in first.writes if w.note_id == child.note_id and w.default_checked]
@@ -183,6 +275,7 @@ def test_furigana_fill_paired_with_guarded_expansion():
     child["cloze-prefix"] = ""
     child["cloze-body"] = ""
     child["cloze-suffix"] = ""
+    child["Expression"] = ""
     c = rec(CHILD.note_id, child, tags=("yomitan",))
     plan = build_plan([PARENT, c], CFG, scope_note_ids=[CHILD.note_id])
     fills = [
