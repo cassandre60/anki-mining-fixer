@@ -86,6 +86,32 @@ def test_notify_refreshes_open_browser(mock_aqt):
     fake_table.redraw_cells.assert_called_once()
 
 
+def test_notify_refreshes_open_browser_when_multiple_cards_selected(mock_aqt):
+    ci, aqt = mock_aqt
+    fake_note = types.SimpleNamespace()
+    fake_card = types.SimpleNamespace(
+        load=MagicMock(),
+        note=MagicMock(return_value=fake_note),
+    )
+    fake_editor = types.SimpleNamespace(set_note=MagicMock())
+    fake_table = types.SimpleNamespace(
+        get_single_selected_card=MagicMock(return_value=None),  # multiple selected
+        get_current_card=MagicMock(return_value=fake_card),
+        redraw_cells=MagicMock(),
+    )
+    fake_browser = types.SimpleNamespace(
+        table=fake_table,
+        editor=fake_editor,
+        _closeEventHasCleanedUp=False,
+    )
+
+    ci.notify_collection_changed(browser=fake_browser)
+    fake_card.load.assert_called_once()
+    fake_card.note.assert_called_once_with(reload=True)
+    fake_editor.set_note.assert_called_once_with(fake_note)
+    fake_table.redraw_cells.assert_called_once()
+
+
 def test_notify_skips_cleaned_up_browser(mock_aqt):
     ci, aqt = mock_aqt
     fake_table = types.SimpleNamespace(redraw_cells=MagicMock())

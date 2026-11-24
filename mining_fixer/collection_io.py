@@ -527,18 +527,24 @@ def notify_collection_changed(browser=None) -> None:
     if browser is not None and not getattr(browser, "_closeEventHasCleanedUp", True):
         try:
             table = getattr(browser, "table", None)
+            editor = getattr(browser, "editor", None)
+            card = None
             if table is not None:
-                card = table.get_single_selected_card()
-                if card is not None:
-                    if hasattr(card, "load"):
-                        card.load()
-                    editor = getattr(browser, "editor", None)
-                    if editor is not None and hasattr(editor, "set_note"):
-                        note = card.note(reload=True) if hasattr(card, "note") else None
-                        if note is not None:
-                            editor.set_note(note)
-                if hasattr(table, "redraw_cells"):
-                    table.redraw_cells()
+                if hasattr(table, "get_single_selected_card"):
+                    card = table.get_single_selected_card()
+                if card is None and hasattr(table, "get_current_card"):
+                    card = table.get_current_card()
+            if card is None and editor is not None:
+                card = getattr(editor, "card", None)
+            if card is not None:
+                if hasattr(card, "load"):
+                    card.load()
+                if editor is not None and hasattr(editor, "set_note"):
+                    note = card.note(reload=True) if hasattr(card, "note") else None
+                    if note is not None:
+                        editor.set_note(note)
+            if table is not None and hasattr(table, "redraw_cells"):
+                table.redraw_cells()
         except Exception as exc:
             print(f"Mining Fixer: browser refresh failed: {exc}")
 

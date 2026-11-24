@@ -37,6 +37,9 @@ class _Action:
         assert self.callback is not None
         self.callback(False)
 
+    def setShortcut(self, shortcut) -> None:
+        self.shortcut = shortcut
+
 
 class _Menu:
     def __init__(self) -> None:
@@ -67,12 +70,20 @@ def loaded_addon(monkeypatch):
     aqt: Any = types.ModuleType("aqt")
     aqt.mw = types.SimpleNamespace(form=types.SimpleNamespace(menuTools=_Menu()))
     aqt.gui_hooks = types.SimpleNamespace(
-        main_window_did_init=[], browser_will_show_context_menu=[]
+        main_window_did_init=[],
+        browser_will_show_context_menu=[],
+        browser_will_show=[],
+        reviewer_will_show_context_menu=[],
     )
+    qt: Any = types.ModuleType("aqt.qt")
+    qt.QAction = lambda text, parent=None: _Action(text)
+    qt.QKeySequence = lambda s: s
     utils: Any = types.ModuleType("aqt.utils")
     utils.showInfo = lambda *a, **k: None
     utils.showWarning = lambda *a, **k: None
+    utils.tooltip = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "aqt", aqt)
+    monkeypatch.setitem(sys.modules, "aqt.qt", qt)
     monkeypatch.setitem(sys.modules, "aqt.utils", utils)
 
     module = importlib.import_module("mining_fixer")
@@ -115,7 +126,10 @@ def test_entry_point_survives_a_missing_main_window(monkeypatch):
     aqt: Any = types.ModuleType("aqt")
     aqt.mw = types.SimpleNamespace(form=None)  # main window not built yet
     aqt.gui_hooks = types.SimpleNamespace(
-        main_window_did_init=[], browser_will_show_context_menu=[]
+        main_window_did_init=[],
+        browser_will_show_context_menu=[],
+        browser_will_show=[],
+        reviewer_will_show_context_menu=[],
     )
     utils: Any = types.ModuleType("aqt.utils")
     utils.showInfo = lambda *a, **k: None
@@ -182,6 +196,41 @@ def test_selection_action_runs_on_the_notes_selected_when_the_menu_opened(
     # The browser instance travels with the run so its editor can be flushed
     # before the writes land.
     assert captured["browser"] is browser
+
+
+def test_reviewer_context_menu_offers_fix_current_card(loaded_addon, monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_batch(ids=None, browser=None):
+        captured.update(ids=ids, browser=browser)
+
+    monkeypatch.setattr(loaded_addon, "_on_batch_selection", fake_batch)
+    hook = sys.modules["aqt"].gui_hooks.reviewer_will_show_context_menu
+    assert len(hook) == 1
+    menu = _Menu()
+    reviewer = types.SimpleNamespace(card=types.SimpleNamespace(nid=42))
+    hook[0](reviewer, menu)
+    assert [a.label for a in menu.actions] == [loaded_addon.REVIEWER_LABEL]
+    _action(menu, loaded_addon.REVIEWER_LABEL).fire()
+    assert captured["ids"] == [42]
+
+
+def test_browser_will_show_adds_shortcut_action(loaded_addon, monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_batch(ids=None, browser=None):
+        captured.update(ids=ids, browser=browser)
+
+    monkeypatch.setattr(loaded_addon, "_on_batch_selection", fake_batch)
+    hook = sys.modules["aqt"].gui_hooks.browser_will_show
+    assert len(hook) == 1
+    actions = []
+    browser = types.SimpleNamespace(
+        selected_notes=lambda: [101, 102],
+        addAction=lambda act: actions.append(act),
+    )
+    hook[0](browser)
+    assert len(actions) == 1
 
 
 def test_preview_dialog_imports_with_real_anki():
