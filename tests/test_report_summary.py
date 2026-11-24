@@ -309,6 +309,7 @@ def test_all_known_badges_have_explanations():
         "bold-normalized-to-one",
         "bold-trimmed-punctuation",
         "bold-retargeted-to-cloze-word",
+        "bold-retargeted-to-expression",
         "stale-parent-bold",
         "parent-bold-removed",
         # Scene expansion

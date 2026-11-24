@@ -66,7 +66,7 @@ __all__ = [
     "scope_from_selection",
 ]
 
-PLAN_VERSION = 6
+PLAN_VERSION = 7
 
 OP_FILL = "fill"
 OP_REPLACE_SOURCE = "replace_source"
@@ -1619,6 +1619,28 @@ def _placeable_bold_candidates(target: NoteRecord) -> list[str]:
     return sorted(out, key=len, reverse=True)
 
 
+def _expansion_anchor(candidate: NoteRecord, parent_sentence: str) -> str:
+    """The word whose unique occurrence in the parent proves the card's spot.
+
+    The scene matcher already proved the card's whole sentence is contained in
+    the parent's; the anchor exists so the completion can retarget the card's
+    own word into the parent's bold and ship the row checked. Preference
+    order: the card's ``cloze-body``, its ``Expression``, then any placeable
+    bold candidate (:func:`_placeable_bold_candidates` — the deck's
+    word-mined cards store no ``cloze-*`` and bold the word inside
+    ``Sentence`` instead). A word occurring more than once in the parent
+    sentence is not an anchor. Pure.
+    """
+    for name in (
+        candidate.get("cloze-body"),
+        candidate.get("Expression"),
+        *_placeable_bold_candidates(candidate),
+    ):
+        if name and _unique_anchor(parent_sentence, name):
+            return name
+    return ""
+
+
 def _single_bold(
     value: str,
     body: str,
@@ -1911,11 +1933,15 @@ def _scene_writes_for(
         or "Sentence" in never_copy
     ):
         return writes, None
-    # Remaining guards: the cloze anchor must be placeable (once, or inside
-    # the card's own fragment), and a stale fragment ruby must not be left
-    # behind (atomic replacement, or regeneration when the engine is here).
+    # Remaining guards: the expansion anchor must be placeable (once, or
+    # inside the card's own fragment), and a stale fragment ruby must not be
+    # left behind (atomic replacement, or regeneration when the engine is
+    # here). Cards that store no ``cloze-*`` (word-mined style: the tested
+    # word is bolded inside ``Sentence``) anchor on their own ``Expression``
+    # when that word is unique in the parent.
     if cand_norm and cand_norm != norm_sentence_match(parent_sentence):
-        unique_anchor = _unique_anchor(parent_sentence, candidate.get("cloze-body"))
+        anchor = _expansion_anchor(candidate, parent_sentence)
+        unique_anchor = bool(anchor)
         fragment_bold = (
             None
             if unique_anchor
@@ -1930,16 +1956,19 @@ def _scene_writes_for(
             )
             badges = ["expands-sentence", kept_badge, *context_badges]
             if unique_anchor:
+                child_body = anchor
                 new_sentence, bold_badge = _retarget_bold(
                     parent_sentence,
                     parent.get("cloze-body"),
-                    candidate.get("cloze-body"),
+                    child_body,
                 )
                 new_sentence = _single_bold(
                     new_sentence,
-                    candidate.get("cloze-body"),
+                    child_body,
                     tuple(_placeable_bold_candidates(candidate)),
                 )
+                if not candidate.get("cloze-body") and anchor:
+                    bold_badge = "bold-retargeted-to-expression"
             else:
                 # The word occurs more than once in the block (校 in 精神医学
                 # 校, 医学校, …): bold the occurrence inside the child's own
