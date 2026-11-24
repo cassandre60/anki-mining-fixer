@@ -527,8 +527,14 @@ def _is_morph_match(
         return False
     try:
         tokens = morph_tokenizer(span_text)
-        if len(tokens) == 1 and tokens[0].pos in ("動詞", "形容詞", "名詞", "副詞", "連体詞"):
+        if tokens and tokens[0].pos in ("動詞", "形容詞", "名詞", "副詞", "連体詞"):
             tok = tokens[0]
+            if len(tokens) > 1 and not all(
+                t.pos == "助動詞"
+                or (t.pos == "動詞" and t.lemma in ("れる", "られる", "せる", "させる", "得る"))
+                for t in tokens[1:]
+            ):
+                return False
             target_reading = kana_fold(norm_reading(reading or ""))
             if len(target_reading) < 2 and furigana:
                 target_reading = kana_fold(reading_from_furigana(furigana) or "")
@@ -906,8 +912,8 @@ def _bold_repair_for(
             if len(target_reading) < 2:
                 target_reading = kana_fold(reading_from_furigana(target.get("furigana")) or "")
             expr_norm = kana_fold(norm_reading(expr))
-            content_matches: list[MorphToken] = []
-            for tok in tokens:
+            content_matches: list[tuple[MorphToken, str]] = []
+            for idx, tok in enumerate(tokens):
                 if tok.pos not in ("動詞", "形容詞", "名詞", "副詞", "連体詞"):
                     continue
                 tok_lemma_norm = kana_fold(norm_reading(tok.lemma))
@@ -927,7 +933,19 @@ def _bold_repair_for(
                     )
                 )
                 if matches:
-                    content_matches.append(tok)
+                    full_surface = tok.surface
+                    next_idx = idx + 1
+                    while next_idx < len(tokens):
+                        ntok = tokens[next_idx]
+                        if ntok.pos == "助動詞" or (
+                            ntok.pos == "動詞"
+                            and ntok.lemma in ("れる", "られる", "せる", "させる", "得る")
+                        ):
+                            full_surface += ntok.surface
+                            next_idx += 1
+                        else:
+                            break
+                    content_matches.append((tok, full_surface))
 
             if len(content_matches) > 1:
                 return (
@@ -936,7 +954,7 @@ def _bold_repair_for(
                     f"multiple inflected tokens for '{expr}' in sentence",
                 )
             if len(content_matches) == 1:
-                chosen_surface = content_matches[0].surface
+                chosen_surface = content_matches[0][1]
                 count = sentence.count(chosen_surface)
                 if count == 1:
                     new_value = _wrap_first_occurrence(sentence, chosen_surface)

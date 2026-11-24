@@ -129,6 +129,7 @@ below, never as silent scope creep inside a coding session.
 | T28 | `test_plan.py` (`test_scene_fill_empty_source`), `test_report_summary.py` (`fills-empty-source` badge coverage) |
 | T31 | `test_plan.py` (`test_expansion_inherits_hand_corrected_sentence_when_cloze_body_empty`), `test_report_summary.py` (`bold-retargeted-to-expression` badge coverage); closes #10 |
 | T32 | `tests/test_addon_load.py` (shortcuts, reviewer action), `tests/test_notify_collection_changed.py` (multi-card editor sync) |
+| T33 | `test_plan.py` (`test_bold_repair_covers_full_inflected_verb_not_bare_stem`); closes #11 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -329,6 +330,12 @@ below, never as silent scope creep inside a coding session.
   multiple cards reloads the active editor note and prevents stale `saveNow()`
   overwrites on Browser close (Q-A9). Pinned in `test_addon_load.py` and
   `test_notify_collection_changed.py`.
+- **T33 — Full inflected verb bolding across auxiliary tokens (Issue #11).**
+  Tier 5 of `_bold_repair_for` previously placed bold only on the single matching
+  lemma token (`襲わ`), cutting inflected verbs in half when MeCab splits auxiliary
+  tokens (`れる`, `た`, `ない`, `ます`, etc.). Both `_bold_repair_for` and `_is_morph_match`
+  now consume adjacent auxiliary verb/particles, bolding the full word (`襲われる`)
+  and recognizing the full span on subsequent runs. Closes Issue #11.
 
 ## Backlog
 
