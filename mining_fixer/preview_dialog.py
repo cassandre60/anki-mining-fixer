@@ -27,7 +27,7 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
 )
-from aqt.utils import showCritical, showInfo
+from aqt.utils import showCritical, showInfo, tooltip
 
 from .applier import ApplyDecision, run_after_editor_saved, verify_writes
 from .collection_io import (
@@ -435,7 +435,10 @@ def _finish_apply(
         lines.extend(f"  {problem}" for problem in problems)
     else:
         lines.append("Verified: every written value matches the plan.")
-    showInfo("\n".join(lines), parent=parent)
+    if problems or decision.skipped:
+        showInfo("\n".join(lines), parent=parent)
+    else:
+        tooltip(f"Mining Fixer: applied {writes} write(s) to {modified} note(s).", parent=parent)
 
 
 def apply_pending(col, pending, browser=None, parent=None) -> None:

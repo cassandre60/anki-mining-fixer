@@ -58,6 +58,10 @@ _BADGE_EXPLANATIONS: dict[str, str] = {
     "bold-normalized-to-one": "Multiple bold runs in the sentence merged to one",
     "bold-trimmed-punctuation": "Punctuation moved outside the bold span",
     "bold-retargeted-to-cloze-word": "Parent's bold replaced with the child's tested word",
+    "bold-retargeted-to-expression": (
+        "Expansion anchored on the card's Expression (no cloze-body stored); "
+        "the parent's bold is retargeted to the card's word"
+    ),
     "stale-parent-bold": (
         "Expansion kept the parent's bold — could not retarget to this card's word"
     ),

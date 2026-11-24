@@ -127,6 +127,8 @@ below, never as silent scope creep inside a coding session.
 | T26 | `test_plan.py` (`test_bold_repair_skips_the_shell_only_definition_listening_shape`); closes B11 |
 | T27 | `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`); QUALITY Q-D11 user-context protection |
 | T28 | `test_plan.py` (`test_scene_fill_empty_source`), `test_report_summary.py` (`fills-empty-source` badge coverage) |
+| T31 | `test_plan.py` (`test_expansion_inherits_hand_corrected_sentence_when_cloze_body_empty`), `test_report_summary.py` (`bold-retargeted-to-expression` badge coverage); closes #10 |
+| T32 | `tests/test_addon_load.py` (shortcuts, reviewer action), `tests/test_notify_collection_changed.py` (multi-card editor sync) |
 | T33 | `test_plan.py` (`test_bold_repair_covers_full_inflected_verb_not_bare_stem`); closes #11 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
@@ -311,6 +313,23 @@ below, never as silent scope creep inside a coding session.
   a metamorphic test that applies only checked writes and re-plans. The
   adversarial shapes (foreign bold, post-partial-apply) are canonical fixtures
   in `test_golden_scene.py` instead of inline test data.
+- **T31 — Scene expansion anchor fallback to Expression (Issue #10).** When
+  a card stores no `cloze-*` (word-mined style), `_expansion_anchor` falls back
+  to `candidate.get("Expression")` and placeable bold candidates when unique
+  in the parent sentence. Retargets parent bold to the child's word with
+  badge `bold-retargeted-to-expression`, allowing word-mined cards to inherit
+  hand-corrected scene blocks (e.g. note 1737313493933 不能 inheriting from
+  1737313442998 戦闘不能). Closes Issue #10. Bumped `PLAN_VERSION` to 7.
+- **T32 — Daily UX ergonomics (tooltips, shortcuts, multi-card sync).**
+  Replaces the blocking modal success message with a transient Anki `tooltip`
+  in both preview and batch flows (`preview_dialog.py`, `batch_dialog.py`). Adds
+  global keyboard shortcut `Ctrl+Alt+F` to batch-fix selection in the Browser
+  and right-click context action in the Reviewer (`Mining Fixer: fix current card`)
+  to fix the active note without switching windows. Hardens multi-selection Browser
+  editor synchronization in `notify_collection_changed` so that applying fixes to
+  multiple cards reloads the active editor note and prevents stale `saveNow()`
+  overwrites on Browser close (Q-A9). Pinned in `test_addon_load.py` and
+  `test_notify_collection_changed.py`.
 - **T33 — Full inflected verb bolding across auxiliary tokens (Issue #11).**
   Tier 5 of `_bold_repair_for` previously placed bold only on the single matching
   lemma token (`襲わ`), cutting inflected verbs in half when MeCab splits auxiliary

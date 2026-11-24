@@ -26,6 +26,7 @@ PREVIEW_LABEL = "Mining Fixer: preview and apply…"
 UNDO_LABEL = "Mining Fixer: undo last run"
 SELECTION_LABEL = "Mining Fixer: preview and apply on selection"
 BATCH_LABEL = "Mining Fixer: batch-fix selection…"
+REVIEWER_LABEL = "Mining Fixer: fix current card"
 
 _menu_added = False
 
@@ -87,13 +88,53 @@ def _on_browser_context_menu(browser, menu) -> None:
         return
     try:
         action = menu.addAction(SELECTION_LABEL)
-        action.triggered.connect(lambda _checked=False: _on_selection_preview(selected, browser))
+        if action is not None:
+            action.triggered.connect(
+                lambda _checked=False: _on_selection_preview(selected, browser)
+            )
         batch_action = menu.addAction(BATCH_LABEL)
-        batch_action.triggered.connect(
-            lambda _checked=False: _on_batch_selection(selected, browser)
-        )
+        if batch_action is not None:
+            if hasattr(batch_action, "setShortcut"):
+                with contextlib.suppress(Exception):
+                    from aqt.qt import QKeySequence
+
+                    batch_action.setShortcut(QKeySequence("Ctrl+Alt+F"))
+            batch_action.triggered.connect(
+                lambda _checked=False: _on_batch_selection(selected, browser)
+            )
     except Exception:
         print(f"Mining Fixer: could not add the Browser action\n{traceback.format_exc()}")
+
+
+def _on_browser_will_show(browser) -> None:
+    try:
+        from aqt.qt import QAction, QKeySequence
+
+        action = QAction("Mining Fixer: batch-fix selection", browser)
+        action.setShortcut(QKeySequence("Ctrl+Alt+F"))
+        action.triggered.connect(
+            lambda _checked=False: _on_batch_selection(list(browser.selected_notes()), browser)
+        )
+        browser.addAction(action)
+    except Exception:
+        pass
+
+
+def _on_reviewer_context_menu(reviewer, menu) -> None:
+    try:
+        card = getattr(reviewer, "card", None)
+        if card is None or not hasattr(card, "nid"):
+            return
+        action = menu.addAction(REVIEWER_LABEL)
+        if action is not None:
+            if hasattr(action, "setShortcut"):
+                with contextlib.suppress(Exception):
+                    from aqt.qt import QKeySequence
+
+                    action.setShortcut(QKeySequence("Ctrl+Alt+F"))
+            action.triggered.connect(lambda _checked=False: _on_batch_selection([card.nid]))
+    except Exception:
+        print(f"Mining Fixer: could not add Reviewer action\n{traceback.format_exc()}")
 
 
 def _on_undo() -> None:
@@ -171,3 +212,7 @@ if mw is not None:
 if gui_hooks is not None:
     gui_hooks.main_window_did_init.append(_add_menu_entries)
     gui_hooks.browser_will_show_context_menu.append(_on_browser_context_menu)
+    if hasattr(gui_hooks, "browser_will_show"):
+        gui_hooks.browser_will_show.append(_on_browser_will_show)
+    if hasattr(gui_hooks, "reviewer_will_show_context_menu"):
+        gui_hooks.reviewer_will_show_context_menu.append(_on_reviewer_context_menu)
