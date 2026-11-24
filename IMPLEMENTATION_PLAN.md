@@ -127,6 +127,7 @@ below, never as silent scope creep inside a coding session.
 | T26 | `test_plan.py` (`test_bold_repair_skips_the_shell_only_definition_listening_shape`); closes B11 |
 | T27 | `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`); QUALITY Q-D11 user-context protection |
 | T28 | `test_plan.py` (`test_scene_fill_empty_source`), `test_report_summary.py` (`fills-empty-source` badge coverage) |
+| T31 | `test_plan.py` (`test_expansion_inherits_hand_corrected_sentence_when_cloze_body_empty`), `test_report_summary.py` (`bold-retargeted-to-expression` badge coverage); closes #10 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -310,6 +311,13 @@ below, never as silent scope creep inside a coding session.
   a metamorphic test that applies only checked writes and re-plans. The
   adversarial shapes (foreign bold, post-partial-apply) are canonical fixtures
   in `test_golden_scene.py` instead of inline test data.
+- **T31 — Scene expansion anchor fallback to Expression (Issue #10).** When
+  a card stores no `cloze-*` (word-mined style), `_expansion_anchor` falls back
+  to `candidate.get("Expression")` and placeable bold candidates when unique
+  in the parent sentence. Retargets parent bold to the child's word with
+  badge `bold-retargeted-to-expression`, allowing word-mined cards to inherit
+  hand-corrected scene blocks (e.g. note 1737313493933 不能 inheriting from
+  1737313442998 戦闘不能). Closes Issue #10. Bumped `PLAN_VERSION` to 7.
 
 ## Backlog
 
