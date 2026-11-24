@@ -25,7 +25,7 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
 )
-from aqt.utils import showCritical, showInfo
+from aqt.utils import showCritical, showInfo, tooltip
 
 from .applier import ApplyDecision, run_after_editor_saved
 from .batch import BatchSelection, default_ops, select
@@ -327,7 +327,13 @@ def _finish_batch(col, pending, browser=None, parent=None) -> None:
     else:
         lines.append("Verified.")
     lines.append('Undo: Tools → "Mining Fixer: undo last run".')
-    showInfo("\n".join(lines), parent=parent)
+    if result.problems or decision.skipped:
+        showInfo("\n".join(lines), parent=parent)
+    else:
+        tooltip(
+            f"Mining Fixer: fixed {result.modified} note(s) ({result.writes} write(s)).",
+            parent=parent,
+        )
 
 
 def open_batch_dialog(scope_note_ids=None, browser=None) -> None:

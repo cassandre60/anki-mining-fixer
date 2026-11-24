@@ -127,6 +127,7 @@ below, never as silent scope creep inside a coding session.
 | T26 | `test_plan.py` (`test_bold_repair_skips_the_shell_only_definition_listening_shape`); closes B11 |
 | T27 | `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`); QUALITY Q-D11 user-context protection |
 | T28 | `test_plan.py` (`test_scene_fill_empty_source`), `test_report_summary.py` (`fills-empty-source` badge coverage) |
+| T32 | `tests/test_addon_load.py` (shortcuts, reviewer action), `tests/test_notify_collection_changed.py` (multi-card editor sync) |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -310,6 +311,16 @@ below, never as silent scope creep inside a coding session.
   a metamorphic test that applies only checked writes and re-plans. The
   adversarial shapes (foreign bold, post-partial-apply) are canonical fixtures
   in `test_golden_scene.py` instead of inline test data.
+- **T32 — Daily UX ergonomics (tooltips, shortcuts, multi-card sync).**
+  Replaces the blocking modal success message with a transient Anki `tooltip`
+  in both preview and batch flows (`preview_dialog.py`, `batch_dialog.py`). Adds
+  global keyboard shortcut `Ctrl+Alt+F` to batch-fix selection in the Browser
+  and right-click context action in the Reviewer (`Mining Fixer: fix current card`)
+  to fix the active note without switching windows. Hardens multi-selection Browser
+  editor synchronization in `notify_collection_changed` so that applying fixes to
+  multiple cards reloads the active editor note and prevents stale `saveNow()`
+  overwrites on Browser close (Q-A9). Pinned in `test_addon_load.py` and
+  `test_notify_collection_changed.py`.
 
 ## Backlog
 
