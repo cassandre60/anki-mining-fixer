@@ -127,6 +127,7 @@ below, never as silent scope creep inside a coding session.
 | T26 | `test_plan.py` (`test_bold_repair_skips_the_shell_only_definition_listening_shape`); closes B11 |
 | T27 | `test_plan.py` (`test_regeneration_protects_user_authored_ruby_context`); QUALITY Q-D11 user-context protection |
 | T28 | `test_plan.py` (`test_scene_fill_empty_source`), `test_report_summary.py` (`fills-empty-source` badge coverage) |
+| T33 | `test_plan.py` (`test_bold_repair_covers_full_inflected_verb_not_bare_stem`); closes #11 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -310,6 +311,12 @@ below, never as silent scope creep inside a coding session.
   a metamorphic test that applies only checked writes and re-plans. The
   adversarial shapes (foreign bold, post-partial-apply) are canonical fixtures
   in `test_golden_scene.py` instead of inline test data.
+- **T33 — Full inflected verb bolding across auxiliary tokens (Issue #11).**
+  Tier 5 of `_bold_repair_for` previously placed bold only on the single matching
+  lemma token (`襲わ`), cutting inflected verbs in half when MeCab splits auxiliary
+  tokens (`れる`, `た`, `ない`, `ます`, etc.). Both `_bold_repair_for` and `_is_morph_match`
+  now consume adjacent auxiliary verb/particles, bolding the full word (`襲われる`)
+  and recognizing the full span on subsequent runs. Closes Issue #11.
 
 ## Backlog
 

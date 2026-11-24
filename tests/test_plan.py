@@ -2799,6 +2799,51 @@ def test_bold_repair_places_inflected_bold_with_morph_tokenizer():
     assert not [w for w in plan2.writes if w.note_id == 1 and w.field == "Sentence"]
 
 
+def test_bold_repair_covers_full_inflected_verb_not_bare_stem():
+    # Issue #11: When MeCab splits an inflected verb into stem + auxiliary
+    # (襲う -> 襲わ + れる), Tier 5 must bold the entire inflected form
+    # <b>襲われる</b> rather than the bare stem <b>襲わ</b>れる.
+    target = rec(
+        1,
+        {
+            "Expression": "襲う",
+            "reading": "おそう",
+            "Sentence": "鬼に襲われる前に逃げろ。",
+        },
+    )
+
+    def mock_tok(text: str):
+        if "襲われる" in text:
+            return [
+                MorphToken("鬼", "名詞", "鬼", "オニ"),
+                MorphToken("に", "助詞", "に", "ニ"),
+                MorphToken("襲わ", "動詞", "襲う", "オソワ"),
+                MorphToken("れる", "動詞", "れる", "レル"),
+                MorphToken("前", "名詞", "前", "マエ"),
+                MorphToken("に", "助詞", "に", "ニ"),
+                MorphToken("逃げろ", "動詞", "逃げる", "ニゲロ"),
+                MorphToken("。", "記号", "。", "。"),
+            ]
+        if text == "襲われる":
+            return [
+                MorphToken("襲わ", "動詞", "襲う", "オソワ"),
+                MorphToken("れる", "動詞", "れる", "レル"),
+            ]
+        return []
+
+    plan = build_plan([target], CFG, scope_note_ids=[1], morph_tokenizer=mock_tok)
+    writes = [w for w in plan.writes if w.note_id == 1 and w.field == "Sentence"]
+    assert len(writes) == 1
+    assert writes[0].op == OP_BOLD_CLOZE_WORD
+    assert writes[0].new_value == "鬼に<b>襲われる</b>前に逃げろ。"
+    assert "bold-added-to-inflected-form" in writes[0].badges
+
+    # Fixpoint (Q-A2): second pass recognizes <b>襲われる</b> and writes nothing
+    target_pass2 = rec(1, {**target.fields, "Sentence": writes[0].new_value})
+    plan2 = build_plan([target_pass2], CFG, scope_note_ids=[1], morph_tokenizer=mock_tok)
+    assert not [w for w in plan2.writes if w.note_id == 1 and w.field == "Sentence"]
+
+
 def test_bold_repair_refuses_ambiguous_multiple_inflections():
     # 行く in "早く行って、行っておいで。" has 2 occurrences of 行って
     target = rec(
