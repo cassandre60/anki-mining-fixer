@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mining_fixer.normalize import (
     REPAIR_RULES,
+    detect_inline_readings,
     furigana_base,
     furigana_base_matches,
     is_empty_glossary_shell,
@@ -11,6 +12,7 @@ from mining_fixer.normalize import (
     norm_reading,
     norm_sentence,
     norm_sentence_match,
+    override_furigana_reading,
     reading_from_furigana,
     repair_sentence,
     word_key,
@@ -457,3 +459,81 @@ def test_kana_fold_matches_codepoint_spec_across_katakana_boundaries():
         assert kana_fold(text) == expected
 
     check()
+
+
+# --- inline subtitle readings (issue #9) -------------------------------------
+
+
+def test_detect_inline_readings_strips_annotation_and_reports_reading():
+    sentence = "あそこの本町(ほんちゅう)通り…"
+    cleaned, anns = detect_inline_readings(sentence)
+    assert cleaned == "あそこの本町通り…"
+    assert anns == [{"base": "本町", "reading": "ほんちゅう", "occurrence": 1}]
+
+
+def test_detect_inline_readings_leaves_non_reading_parens():
+    sentence = "あの歌(笑)を聞いた"
+    cleaned, anns = detect_inline_readings(sentence)
+    assert cleaned == sentence
+    assert anns == []
+
+
+def test_detect_inline_readings_multiple_annotations():
+    sentence = "本町(ほんちゅう)と本町(ほんちょう)通り"
+    cleaned, anns = detect_inline_readings(sentence)
+    assert cleaned == "本町と本町通り"
+    assert [a["reading"] for a in anns] == ["ほんちゅう", "ほんちょう"]
+    assert [a["occurrence"] for a in anns] == [1, 2]
+
+
+def test_detect_inline_readings_katakana_payload_normalized():
+    sentence = "本町(ホンチュウ)通り"
+    cleaned, anns = detect_inline_readings(sentence)
+    assert cleaned == "本町通り"
+    assert anns[0]["reading"] == "ほんちゅう"
+
+
+def test_override_furigana_reading_merges_spans():
+    generated = "あそこの 本[ほん]町[ちょう]通り…"
+    cleaned = "あそこの 本町通り…"
+    anns = [{"base": "本町", "reading": "ほんちゅう", "occurrence": 1}]
+    result = override_furigana_reading(generated, cleaned, anns)
+    assert result is not None
+    assert "本町[ほんちゅう]" in result
+    assert "通り" in result
+
+
+def test_override_furigana_reading_single_span():
+    generated = "あそこの 本町[ほんちょう]通り…"
+    cleaned = "あそこの 本町通り…"
+    anns = [{"base": "本町", "reading": "ほんちゅう", "occurrence": 1}]
+    result = override_furigana_reading(generated, cleaned, anns)
+    assert result is not None
+    assert "本町[ほんちゅう]" in result
+
+
+def test_override_furigana_reading_returns_none_on_misalignment():
+    generated = "あそこの 本町通り[ほんちょうどおり]…"
+    cleaned = "あそこの 本町通り…"
+    anns = [{"base": "本町", "reading": "ほんちゅう", "occurrence": 1}]
+    result = override_furigana_reading(generated, cleaned, anns)
+    assert result is None
+
+
+def test_override_furigana_reading_returns_none_when_base_missing():
+    generated = "あそこの 通り…"
+    cleaned = "あそこの 通り…"
+    anns = [{"base": "本町", "reading": "ほんちゅう", "occurrence": 1}]
+    result = override_furigana_reading(generated, cleaned, anns)
+    assert result is None
+
+
+def test_override_furigana_reading_validates_base_match():
+    generated = "あそこの 本[ほん]町[ちょう]通り…"
+    cleaned = "あそこの 本町通り…"
+    anns = [{"base": "本町", "reading": "ほんちゅう", "occurrence": 1}]
+    result = override_furigana_reading(generated, cleaned, anns)
+    assert result is not None
+    from mining_fixer.normalize import furigana_base_matches
+
+    assert furigana_base_matches(result, cleaned)

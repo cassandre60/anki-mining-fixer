@@ -40,6 +40,8 @@ __all__ = [
     "word_key",
     "strip_renderable",
     "kana_fold",
+    "detect_inline_readings",
+    "override_furigana_reading",
 ]
 
 
@@ -569,3 +571,167 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
     if not applied:
         return text, ()
     return s, tuple(applied)
+
+
+# --- inline subtitle readings (issue #9) -------------------------------------
+
+_KANJI_RUN_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\u3005\u3006]+")
+
+
+def _kana_payload_ok(payload: str, kanji_len: int) -> bool:
+    if not payload or len(payload) < 2:
+        return False
+    if kanji_len < 2:
+        return False
+    return not len(payload) > 3 * kanji_len
+
+
+def _is_kana_payload(payload: str) -> bool:
+    if not payload:
+        return False
+    return all(
+        ("\u3040" <= ch <= "\u309f") or ("\u30a0" <= ch <= "\u30ff") or ch in "ー・ゝゞヽヾ"
+        for ch in payload
+    )
+
+
+_INLINE_ANNOTATION_RE = re.compile(
+    r"([\u4e00-\u9fff\u3400-\u4dbf\u3005\u3006]+)(\s?)[\(（]([^)）]*)[\)）]"
+)
+
+
+def detect_inline_readings(sentence: str) -> tuple[str, list[dict]]:
+    if not sentence:
+        return sentence or "", []
+
+    annotations: list[dict] = []
+    cleaned_parts: list[str] = []
+    last = 0
+    for match in _INLINE_ANNOTATION_RE.finditer(sentence):
+        kanji = match.group(1)
+        payload_raw = match.group(3)
+        payload_norm = kana_fold(norm_reading(payload_raw))
+        if not _is_kana_payload(payload_norm):
+            continue
+        if not _kana_payload_ok(payload_norm, len(kanji)):
+            continue
+        cleaned_parts.append(sentence[last : match.start()])
+        cleaned_parts.append(kanji)
+        annotations.append({"base": kanji, "reading": payload_norm})
+        last = match.end()
+    cleaned_parts.append(sentence[last:])
+    cleaned = "".join(cleaned_parts)
+
+    cursor = 0
+    for ann in annotations:
+        base = ann["base"]
+        idx = cleaned.find(base, cursor)
+        if idx == -1:
+            ann["occurrence"] = 1
+            continue
+        ann["occurrence"] = cleaned[:idx].count(base) + 1
+        cursor = idx + len(base)
+
+    return cleaned, annotations
+
+
+def strip_inline_readings(sentence: str) -> tuple[str, list[dict]]:
+    return detect_inline_readings(sentence)
+
+
+def override_furigana_reading(
+    generated: str, cleaned_sentence: str, annotations: list[dict]
+) -> str | None:
+    if not generated or not annotations or not cleaned_sentence:
+        return None
+
+    spans: list[tuple[str, str | None]] = []
+    buf = ""
+    i = 0
+    n = len(generated)
+    while i < n:
+        ch = generated[i]
+        if ch == "[":
+            k = generated.find("]", i)
+            if k == -1:
+                buf += generated[i:]
+                break
+            reading = generated[i + 1 : k]
+            stripped_buf = buf.rstrip(" ")
+            leading = buf[: len(buf) - len(stripped_buf)]
+            if " " in stripped_buf:
+                space_idx = stripped_buf.rfind(" ")
+                plain = leading + stripped_buf[: space_idx + 1]
+                base = stripped_buf[space_idx + 1 :]
+            else:
+                plain = leading
+                base = stripped_buf
+            if plain:
+                spans.append((plain, None))
+            if base:
+                spans.append((base, reading))
+            buf = ""
+            i = k + 1
+        else:
+            buf += ch
+            i += 1
+    if buf:
+        spans.append((buf, None))
+
+    recon = "".join((f"{b}[{r}]" if r is not None else b) for b, r in spans)
+    if recon != generated:
+        return None
+
+    result_spans = list(spans)
+    for ann in annotations:
+        base = ann["base"]
+        reading = ann["reading"]
+        occ = int(ann.get("occurrence", 1))
+
+        cur_base_text = "".join(s[0] for s in result_spans)
+        start = -1
+        pos = 0
+        count = 0
+        while True:
+            idx = cur_base_text.find(base, pos)
+            if idx == -1:
+                break
+            count += 1
+            if count == occ:
+                start = idx
+                break
+            pos = idx + 1
+        if start == -1:
+            return None
+        end = start + len(base)
+
+        offsets: list[tuple[int, int]] = []
+        cur = 0
+        for sp in result_spans:
+            offsets.append((cur, cur + len(sp[0])))
+            cur += len(sp[0])
+
+        first = None
+        last = None
+        for idx, (a, b) in enumerate(offsets):
+            if first is None and (a == start or (a < start < b)):
+                first = idx
+            if a < end <= b:
+                last = idx
+                break
+        if first is None or last is None:
+            return None
+        if offsets[first][0] != start:
+            return None
+        if offsets[last][1] != end:
+            return None
+
+        merged_base = "".join(s[0] for s in result_spans[first : last + 1])
+        if merged_base != base:
+            return None
+        result_spans = result_spans[:first] + [(base, reading)] + result_spans[last + 1 :]
+
+    result = "".join((f"{b}[{r}]" if r is not None else b) for b, r in result_spans)
+    if not furigana_base_matches(result, cleaned_sentence):
+        return None
+    return result
