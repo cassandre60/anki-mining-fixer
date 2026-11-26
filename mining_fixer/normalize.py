@@ -366,42 +366,35 @@ def _strip_nbsp(text: str) -> str:
 
 # --- paren style normalization ------------------------------------------------
 #
-# Subtitle dumps and mining tools sometimes carry generic (half-width) parens
-# where the Japanese style — full-width `（）` — is wanted (issue #16: the
-# 浮く card, speaker (ヒロミ)). The `normalize-parens` rule converts every
-# complete ASCII pair `(...)` to `（...）`, per line, EXCEPT speaker/stage
-# tags: a short parenthesised name alone on a line is the repo's speaker-paren
-# notion (QUALITY Q-D11) and stays as mined. Unbalanced or nested pairs are
-# left as-is. The transform is idempotent.
+# Subtitle dumps and mining tools sometimes carry generic (half-width) speaker
+# parens where the Japanese style — full-width `（）` — is wanted (issue #16:
+# the 浮く card, speaker (ヒロミ)). The `normalize-parens` rule rewrites a
+# speaker/stage tag — a short parenthesised name that opens a line, the repo's
+# speaker-paren notion — to full-width. A short pair used for some other
+# purpose inside the sentence, and unbalanced or nested pairs, stay as mined.
+# The transform is idempotent.
 
-#: A speaker/stage tag: a short ASCII parenthesised name alone on a line.
-#: Speakers are a short name in parens on their own line (the repo's
-#: speaker-paren notion); anything longer is not a speaker tag.
-_SPEAKER_TAG_RE = re.compile(r"^\([^\(\)\n]{1,16}\)$")
-
-#: A complete, non-nested ASCII pair: `(` ... `)` with no parens inside.
-_ASCII_PAIR_RE = re.compile(r"\(([^()]*)\)")
+#: A speaker/stage tag opening a line: a short parenthesised name, either
+#: style (plan._bold_repair's speaker tiers, QUALITY Q-D11). The tag may be
+#: the whole line or the line's opening prefix (``(ヒロミ)おはよう``).
+_SPEAKER_TAG_RE = re.compile(r"[ \t]*[（(][^()（）\n]{1,16}[)）]")
 
 
-def _is_speaker_tag_line(line: str) -> bool:
-    return bool(_SPEAKER_TAG_RE.match(line.strip()))
-
-
-def _convert_ascii_pairs(text: str) -> str:
-    # Nested pairs are left as-is (issue #16).
-    if re.search(r"\([^)]*\(", text):
-        return text
-    return _ASCII_PAIR_RE.sub(lambda m: "（" + m.group(1) + "）", text)
+def _speaker_tag_to_fullwidth(match: re.Match[str]) -> str:
+    """Replacement for :data:`_SPEAKER_TAG_RE`: the pair -> full-width."""
+    pair = match.group(0)
+    lead = len(pair) - len(pair.lstrip(" \t"))
+    return pair[:lead] + "（" + pair[lead + 1 : -1] + "）"
 
 
 def _normalize_parens(text: str) -> str:
-    """Convert speaker/stage tags to Japanese-style full-width parens.
+    """Convert line-opening speaker/stage tags to Japanese-style parens.
 
-    Runs per line (``<br>`` / newline separated). A line that is a single
-    speaker/stage tag (a short parenthesised name alone on the line) has its
-    ASCII parens rewritten to ``（...）``; every other line — including
-    parens used for other purposes inside the sentence — is left untouched.
-    Unbalanced or already-full-width pairs are untouched. Pure.
+    Runs per line (``<br>`` / newline separated). A line that opens with a
+    speaker/stage tag (a short parenthesised name, either style — the repo's
+    speaker-paren notion) has that pair rewritten to ``（name）``; a short
+    pair used for some other purpose inside the sentence, and unbalanced or
+    nested pairs, stay as mined. Idempotent. Pure.
     """
     if "(" not in text:
         return text
@@ -411,10 +404,11 @@ def _normalize_parens(text: str) -> str:
         if i % 2 == 1:
             out.append(part)
             continue
-        if _is_speaker_tag_line(part):
-            out.append(_convert_ascii_pairs(part))
-        else:
+        match = _SPEAKER_TAG_RE.match(part)
+        if match is None:
             out.append(part)
+        else:
+            out.append(_speaker_tag_to_fullwidth(match) + part[match.end() :])
     return "".join(out)
 
 
