@@ -427,7 +427,7 @@ _ARROW_TAIL_RE = re.compile(
 # report: "(荒木)<br>相手が あなたなら…"). Only short parenthesised tags are
 # joined, so a real parenthetical sentence keeps its break.
 _SPEAKER_LINE_BREAK_RE = re.compile(
-    r"(\([^()\n]{1,12}\)|（[^（）\n]{1,12}）)[ \t]*<br\s*/?>"
+    r"((?:^|<br\s*/?>)\s*(?:\([^()\n]{1,12}\)|（[^（）\n]{1,12}）))[ \t]*<br\s*/?>"
     r"(?![ \t\r\n]*<br\s*/?>)",
     re.IGNORECASE,
 )
