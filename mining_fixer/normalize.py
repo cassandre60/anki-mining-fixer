@@ -419,14 +419,16 @@ def _normalize_parens(text: str) -> str:
 _ARROW_TAIL_RE = re.compile(
     "[\u2192\u21d2\u27a1]+\ufe0f?(?=[ \t]*(?:<br\\s*/?>|\n|$))", re.IGNORECASE
 )
-# A speaker/stage tag alone on a line — ``(荒木)``, ``（葉子）`` — followed by
+# A speaker/stage tag ALONE on a line — ``(荒木)``, ``(葉子)`` — followed by
 # a line break: the break is the subtitle's wrapping, not the speech (owner
-# report: "(荒木)<br>相手が あなたなら…"). Only short parenthesised tags are
-# joined, so a real parenthetical sentence keeps its break.
+# report: "(荒木)<br>相手が あなたなら..."). The tag must OPEN its line; a
+# short parenthetical at the END of a text line (``...知ってた?(test)<br>``)
+# is not a speaker tag, so that break is real and kept (owner report
+# 2026-11-26).
 _SPEAKER_LINE_BREAK_RE = re.compile(
-    r"(\([^()\n]{1,12}\)|（[^（）\n]{1,12}）)[ \t]*<br\s*/?>"
+    r"(^|<br\s*/?>|\n)[ \t]*(\([^()\n]{1,12}\)|（[^（）\n]{1,12}）)[ \t]*<br\s*/?>"
     r"(?![ \t\r\n]*<br\s*/?>)",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -543,7 +545,7 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
             applied.append("normalize-parens")
             s = normalized
     if "join-speaker-lines" in wanted:
-        joined = _SPEAKER_LINE_BREAK_RE.sub(r"\1", s)
+        joined = _SPEAKER_LINE_BREAK_RE.sub(r"\1\2", s)
         if joined != s:
             applied.append("join-speaker-lines")
             s = joined

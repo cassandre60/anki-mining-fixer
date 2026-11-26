@@ -82,8 +82,11 @@ not have and must never be given.
   without guessing — `test_bold_repair_recognizes_inflected_span_with_morph_tokenizer`
   and `test_bold_repair_places_inflected_bold_with_morph_tokenizer`.
 - **The expanded rule set and convergence** are pinned in
-  `tests/test_normalize.py` (a speaker tag's line break joins; a long
-  parenthetical keeps its break) and `tests/test_plan.py` (bold via the
+  `tests/test_normalize.py` (a line-opening speaker tag's break joins; a
+  long parenthetical keeps its break; `test_repair_join_keeps_the_break_after_a_mid_line_parenthetical`
+  pins that a short pair at the end of a text line — `…(test)<br>` — keeps
+  its real break, and `test_normalize_parens_converts_speaker_tag_prefixing_a_line`
+  pins the line-prefix conversion) and `tests/test_plan.py` (bold via the
   furigana's per-kanji spellings — 類い希 → 類いまれ; an already-completed
   sentence is never expanded again, so a second run stays a no-op).
 - **Scene completion from missing audio** (QUALITY Q-D16) is pinned in
