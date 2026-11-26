@@ -10,13 +10,15 @@
   "batch_replace_source": true,
   "batch_scene_propagation": true,
   "batch_repair_sentence": true,
+  "batch_strip_inline_readings": true,
   "sentence_repair_rules": [
     "flatten-div-blocks",
     "strip-arrows",
     "join-speaker-lines",
     "strip-dash",
     "strip-nbsp",
-    "normalize-parens"
+    "normalize-parens",
+    "strip-inline-readings"
   ],
   "batch_regenerate_furigana": true,
   "batch_repair_expression": true,
