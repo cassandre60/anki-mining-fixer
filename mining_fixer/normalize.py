@@ -563,11 +563,6 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
         if stripped != s:
             applied.append("strip-nbsp")
             s = stripped
-    if "strip-inline-readings" in wanted:
-        cleaned, anns = detect_inline_readings(s)
-        if anns and cleaned != s:
-            applied.append("strip-inline-readings")
-            s = cleaned
     if not applied:
         return text, ()
     return s, tuple(applied)
