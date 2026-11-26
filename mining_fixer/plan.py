@@ -1642,7 +1642,11 @@ def _placeable_bold_candidates(target: NoteRecord) -> list[str]:
     return sorted(out, key=len, reverse=True)
 
 
-def _expansion_anchor(candidate: NoteRecord, parent_sentence: str) -> str:
+def _expansion_anchor(
+    candidate: NoteRecord,
+    parent_sentence: str,
+    morph_tokenizer: Callable[[str], Sequence[MorphToken]] | None = None,
+) -> str:
     """The word whose unique occurrence in the parent proves the card's spot.
 
     The scene matcher already proved the card's whole sentence is contained in
@@ -1653,6 +1657,12 @@ def _expansion_anchor(candidate: NoteRecord, parent_sentence: str) -> str:
     word-mined cards store no ``cloze-*`` and bold the word inside
     ``Sentence`` instead). A word occurring more than once in the parent
     sentence is not an anchor. Pure.
+
+    When no exact surface occurs (an inflected or nominalized form — 愚かしい
+    vs the parent's 愚かしさ), a morphological fallback reuses the bold tier's
+    matching to find the single inflected surface in the parent and anchor on
+    it (issue #17). The suffix consumption mirrors Tier 5 so the full
+    nominalized span anchors, not its bare stem.
     """
     for name in (
         candidate.get("cloze-body"),
@@ -1661,6 +1671,54 @@ def _expansion_anchor(candidate: NoteRecord, parent_sentence: str) -> str:
     ):
         if name and _unique_anchor(parent_sentence, name):
             return name
+    # Morphological fallback (issue #17): the word may occur in the parent
+    # only as an inflected / nominalized form of the candidate.
+    if morph_tokenizer is None:
+        return ""
+    reading = candidate.get("reading") or ""
+    furigana = candidate.get("furigana") or ""
+    parent_plain = strip_renderable(parent_sentence)
+    try:
+        tokens = morph_tokenizer(parent_plain)
+    except Exception:
+        return ""
+    for name in (
+        candidate.get("cloze-body"),
+        candidate.get("Expression"),
+        *_placeable_bold_candidates(candidate),
+    ):
+        name = strip_renderable(name or "").strip()
+        if not name:
+            continue
+        surfaces: list[str] = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok.pos in ("動詞", "形容詞", "名詞", "副詞", "連体詞") and _is_morph_match(
+                tok.surface, name, reading, morph_tokenizer, furigana
+            ):
+                full = tok.surface
+                j = i + 1
+                while j < len(tokens):
+                    ntok = tokens[j]
+                    if (
+                        ntok.pos == "助動詞"
+                        or (
+                            ntok.pos == "動詞"
+                            and ntok.lemma in ("れる", "られる", "せる", "させる", "得る")
+                        )
+                        or (ntok.pos == "名詞" and ntok.surface in ("さ", "み", "げ"))
+                    ):
+                        full += ntok.surface
+                        j += 1
+                    else:
+                        break
+                surfaces.append(full)
+                i = j
+            else:
+                i += 1
+        if len(surfaces) == 1:
+            return surfaces[0]
     return ""
 
 
@@ -1780,6 +1838,7 @@ def _scene_writes_for(
     cfg: dict,
     ruby_regeneration_available: bool = False,
     cache: dict[int, str] | None = None,
+    morph_tokenizer: Callable[[str], Sequence[MorphToken]] | None = None,
 ) -> tuple[list[PlannedWrite], str | None]:
     """Emit scene-op writes for one candidate, or a reason string.
 
@@ -1963,7 +2022,7 @@ def _scene_writes_for(
     # word is bolded inside ``Sentence``) anchor on their own ``Expression``
     # when that word is unique in the parent.
     if cand_norm and cand_norm != norm_sentence_match(parent_sentence):
-        anchor = _expansion_anchor(candidate, parent_sentence)
+        anchor = _expansion_anchor(candidate, parent_sentence, morph_tokenizer)
         unique_anchor = bool(anchor)
         fragment_bold = (
             None
@@ -2570,6 +2629,7 @@ def build_plan(
                 cfg,
                 ruby_regeneration_available=furigana_tier and furigana_generator is not None,
                 cache=cache,
+                morph_tokenizer=morph_tokenizer,
             )
             if not scene_writes and reason == "no-parent-that-fills":
                 recovered, _recovered_reason = _word_recovered_scene_writes(
