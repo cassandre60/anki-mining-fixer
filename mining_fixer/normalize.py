@@ -395,14 +395,15 @@ def _convert_ascii_pairs(text: str) -> str:
 
 
 def _normalize_parens(text: str) -> str:
-    """Convert complete ASCII paren pairs to Japanese-style full-width parens.
+    """Convert speaker/stage tags to Japanese-style full-width parens.
 
     Runs per line (``<br>`` / newline separated). A line that is a single
-    speaker/stage tag (a short parenthesised name alone on the line) is left
-    as mined. Every other complete, non-nested ASCII pair ``(...)`` becomes
-    ``（...）``; unbalanced or already-full-width pairs are untouched. Pure.
+    speaker/stage tag (a short parenthesised name alone on the line) has its
+    ASCII parens rewritten to ``（...）``; every other line — including
+    parens used for other purposes inside the sentence — is left untouched.
+    Unbalanced or already-full-width pairs are untouched. Pure.
     """
-    if "(" not in text or ")" not in text:
+    if "(" not in text:
         return text
     parts = re.split(r"(<br\s*/?>|\n)", text, flags=re.IGNORECASE)
     out: list[str] = []
@@ -411,9 +412,9 @@ def _normalize_parens(text: str) -> str:
             out.append(part)
             continue
         if _is_speaker_tag_line(part):
-            out.append(part)
-        else:
             out.append(_convert_ascii_pairs(part))
+        else:
+            out.append(part)
     return "".join(out)
 
 
@@ -508,15 +509,17 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
       ``<br>`` line breaks they stand for (runs first: it can expose a
       line-tail arrow or a speaker tag for the rules below);
     - ``strip-arrows`` — remove continuation arrows only at line tails;
+    - ``normalize-parens`` — convert speaker/stage tags (short
+      parenthesised names, the repo's speaker-paren notion) to the
+      Japanese-style full-width ``（name）``; pairs that are not speaker
+      tags (longer than 16 chars, nested or unbalanced) stay as mined
+      (issue #16; runs before ``join-speaker-lines`` so a tag is converted
+      while it is still alone on its line).
     - ``join-speaker-lines`` — join a short speaker tag to its line;
     - ``strip-dash`` — remove the stray horizontal bars (U+2015) the Mining
       cards' Sentences carry (owner report 2026-11-20); the strip is
       Sentence-field scoped — callers that repair the ruby exclude it
       (``RUBY_EXCLUDED_RULES``).
-    - ``normalize-parens`` — convert complete ASCII paren pairs
-      ``(...)`` to the Japanese-style full-width ``（...）``, per line;
-      speaker/stage tags (a short parenthesised name alone on a line) stay
-      as mined, and unbalanced or nested pairs are untouched (issue #16).
 
     ``<br>`` line breaks and spacing are otherwise deliberately NOT rewritten
     (owner decision 2026-11-15; ``flatten-div-blocks`` is the owner's
@@ -540,6 +543,11 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
         if stripped != s:
             applied.append("strip-arrows")
             s = stripped
+    if "normalize-parens" in wanted:
+        normalized = _normalize_parens(s)
+        if normalized != s:
+            applied.append("normalize-parens")
+            s = normalized
     if "join-speaker-lines" in wanted:
         joined = _SPEAKER_LINE_BREAK_RE.sub(r"\1", s)
         if joined != s:
@@ -555,11 +563,6 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
         if stripped != s:
             applied.append("strip-nbsp")
             s = stripped
-    if "normalize-parens" in wanted:
-        normalized = _normalize_parens(s)
-        if normalized != s:
-            applied.append("normalize-parens")
-            s = normalized
     if not applied:
         return text, ()
     return s, tuple(applied)

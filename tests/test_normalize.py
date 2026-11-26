@@ -266,14 +266,14 @@ def test_repair_joins_a_line_break_after_a_speaker_tag():
     # line, so normalize-parens then converts the now-inline pair (issue #16).
     text = "日野君も ここに来てるんだ?<br>(荒木)<br>相手が あなたなら守秘義務も<br>もありませんよ。"
     new, applied = repair_sentence(text, ALL_RULES)
-    assert applied == ("join-speaker-lines", "normalize-parens")
+    assert applied == ("normalize-parens", "join-speaker-lines")
     assert "（荒木）相手が" in new
     # A long parenthesised aside is not a speaker tag: its break survives the
     # join, and the pair is converted to Japanese style.
     long_line = "これは(とても長い補足の文章でここはタグではない)<br>続き。"
     new2, applied2 = repair_sentence(long_line, ALL_RULES)
-    assert applied2 == ("normalize-parens",)
-    assert new2 == "これは（とても長い補足の文章でここはタグではない）<br>続き。"
+    assert applied2 == ()
+    assert new2 == long_line
 
 
 def test_repair_join_does_not_cross_a_blank_line():
@@ -283,10 +283,13 @@ def test_repair_join_does_not_cross_a_blank_line():
     # fixes a card; a second is a no-op). Real value, note 1744221774736.
     # The speaker tag stays as mined (issue #16).
     text = "微かな望みさえ見えない<br>(So dark)<br><br>手を伸ばしても届かない"
-    assert repair_sentence(text, ALL_RULES) == (text, ())
+    new, applied = repair_sentence(text, ALL_RULES)
+    # normalize-parens converts the speaker tag (issue #16).
+    assert applied == ("normalize-parens",)
+    assert new == "微かな望みさえ見えない<br>（So dark）<br><br>手を伸ばしても届かない"
     # A single break after the tag still joins.
     new, applied = repair_sentence("微かな<br>(So dark)<br>手を", ALL_RULES)
-    assert applied == ("join-speaker-lines", "normalize-parens")
+    assert applied == ("normalize-parens", "join-speaker-lines")
     assert new == "微かな<br>（So dark）手を"
 
 
@@ -296,49 +299,54 @@ def test_repair_unknown_rules_are_ignored():
     assert new == "前<br>後"
 
 
-# --- normalize-parens (ASCII parens -> Japanese style, issue #16) -------------
+# --- normalize-parens (speaker parens -> Japanese style, issue #16) -----------
 #
-# Subtitle dumps write Sentences with generic (half-width) parens where the
-# Japanese style — full-width `（）` — is wanted (owner report: the 浮く card,
-# speaker (ヒロミ)). The rule converts every complete ASCII pair `(...)` to
-# `（...）`, per line, EXCEPT speaker/stage tags: a short parenthesised name
-# alone on a line is the repo's speaker-paren notion (QUALITY Q-D11) and
-# stays as mined. Unbalanced or nested pairs are left as-is.
+# Subtitle dumps write Sentences with generic (half-width) speaker parens where
+# the Japanese style — full-width `（）` — is wanted (owner report: the 浮く
+# card, speaker (ヒロミ)). The rule converts speaker/stage tags (short
+# parenthesised names, the repo's speaker-paren notion) to `（name）`; pairs
+# that are not speaker tags (longer than 16 chars, nested or unbalanced, or
+# used inline for other purposes) stay as mined. Unbalanced or nested pairs
+# are left as-is.
 
 
-def test_normalize_parens_converts_ascii_pair_to_japanese_style():
-    text = "あの歌(葉子)を聞いた"
+def test_normalize_parens_converts_speaker_tag_to_japanese_style():
+    text = "(葉子)"
     new, applied = repair_sentence(text, ALL_RULES)
     assert applied == ("normalize-parens",)
-    assert new == "あの歌（葉子）を聞いた"
+    assert new == "（葉子）"
     # Idempotent: the converted value is the fixpoint.
     assert repair_sentence(new, ALL_RULES) == (new, ())
 
 
-def test_normalize_parens_leaves_speaker_tag_as_mined():
-    # A short parenthesised name alone on a line is a speaker tag and stays
-    # in ASCII.
-    text = "(葉子)"
+def test_normalize_parens_leaves_inline_parens_as_is():
+    # A parenthesised pair inside the sentence (not a speaker tag alone on a
+    # line) is left untouched.
+    text = "あの歌(葉子)を聞いた"
     assert repair_sentence(text, ALL_RULES) == (text, ())
 
 
-def test_normalize_parens_converts_pair_on_one_line_but_not_speaker_on_another():
-    text = "あの歌(葉子)を聞いた<br>(ヒロミ)"
+def test_normalize_parens_converts_speaker_tag_among_other_lines():
+    text = "あの歌を聞いた<br>(ヒロミ)"
     new, applied = repair_sentence(text, ALL_RULES)
     assert applied == ("normalize-parens",)
-    assert new == "あの歌（葉子）を聞いた<br>(ヒロミ)"
+    assert new == "あの歌を聞いた<br>（ヒロミ）"
 
 
-def test_normalize_parens_leaves_unbalanced_and_nested_as_is():
-    text_unbalanced = "あの(浮くを思い出した"
-    assert repair_sentence(text_unbalanced, ALL_RULES) == (text_unbalanced, ())
-    # Nested pairs are left untouched.
-    text_nested = "外(内(中)外)尾"
-    assert repair_sentence(text_nested, ALL_RULES) == (text_nested, ())
+def test_normalize_parens_leaves_long_speaker_as_is():
+    # A parenthesised name longer than the speaker-paren limit (16 chars) is
+    # not a speaker tag and stays as mined.
+    text = "(とても長い補足の文章でここはタグではない)"
+    assert repair_sentence(text, ALL_RULES) == (text, ())
+
+
+def test_normalize_parens_leaves_unbalanced_as_is():
+    text = "あの(浮くを思い出した"
+    assert repair_sentence(text, ALL_RULES) == (text, ())
 
 
 def test_normalize_parens_with_rule_off():
-    text = "あの歌(葉子)を聞いた"
+    text = "(葉子)"
     assert repair_sentence(text, ()) == (text, ())
 
 
