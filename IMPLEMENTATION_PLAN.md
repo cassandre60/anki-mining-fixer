@@ -324,9 +324,10 @@ below, never as silent scope creep inside a coding session.
 - **T32 — Daily UX ergonomics (tooltips, shortcuts, multi-card sync).**
   Replaces the blocking modal success message with a transient Anki `tooltip`
   in both preview and batch flows (`preview_dialog.py`, `batch_dialog.py`). Adds
-  global keyboard shortcut `Ctrl+Alt+F` to batch-fix selection in the Browser
-  and right-click context action in the Reviewer (`Mining Fixer: fix current card`)
-  to fix the active note without switching windows. Hardens multi-selection Browser
+  keyboard shortcut support (default `Ctrl+Alt+F`, configurable or disableable via
+  `"shortcut_fix"` in `config.json`) to batch-fix selection in the Browser and
+  fix the active card in the Reviewer (`Mining Fixer: fix current card`)
+  without switching windows. Hardens multi-selection Browser
   editor synchronization in `notify_collection_changed` so that applying fixes to
   multiple cards reloads the active editor note and prevents stale `saveNow()`
   overwrites on Browser close (Q-A9). Pinned in `test_addon_load.py` and
