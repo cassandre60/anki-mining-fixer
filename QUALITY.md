@@ -99,9 +99,12 @@ first, with the reason.
   a visible character; owner addition 2026-11-17), `strip-arrows`
   (continuation arrows at line tails;
   mid-line glyphs such as `f:X→Y` are real notation and stay) and
-  `join-speaker-lines` (a short speaker/stage tag alone on a line —
-  ``(荒木)``, ``（葉子）`` — loses the line break that follows it; longer
-  parenthesised text keeps its break, so a real aside is never joined) and
+  `join-speaker-lines` (a short speaker/stage tag that **opens** its line —
+  ``(荒木)``, ``(葉子)`` — loses the line break that follows it; a short
+  parenthetical at the end of a text line (``…知ってた?(test)<br>``) is
+  not a speaker tag, so its break is real and is kept (owner report
+  2026-11-26); longer parenthesised text keeps its break too, so a real
+  aside is never joined) and
   `strip-dash` (the stray horizontal bar — U+2015, the "―" — the Mining
   cards' Sentences carried; owner report 2026-11-20). The strip is
   **Sentence-field-only**: `plan._ruby_repair_rules` excludes `strip-dash`
