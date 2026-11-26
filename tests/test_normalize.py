@@ -295,6 +295,26 @@ def test_repair_join_does_not_cross_a_blank_line():
     assert new == "微かな<br>（So dark）手を"
 
 
+def test_repair_join_keeps_the_break_after_a_mid_line_parenthetical():
+    # A short paren at the END of a text line — (test)<br> — is not a
+    # speaker/stage tag alone on a line: its break is real and must survive
+    # the join (owner report 2026-11-26; the 浮く card with (test) added).
+    text = (
+        "(ヒロミ)最近 ヤナギハラさんが一人なの 知ってた?(test)<br>"
+        "(悟)えっ 美里が?<br>"
+        "(ヒロミ)あの給食費のことがあってから<br>"
+        "みんなから<b>浮いちゃってる</b>みたい。"
+    )
+    new, applied = repair_sentence(text, ALL_RULES)
+    assert applied == ("normalize-parens",)
+    assert new == (
+        "（ヒロミ）最近 ヤナギハラさんが一人なの 知ってた?(test)<br>"
+        "（悟）えっ 美里が?<br>"
+        "（ヒロミ）あの給食費のことがあってから<br>"
+        "みんなから<b>浮いちゃってる</b>みたい。"
+    )
+
+
 def test_repair_unknown_rules_are_ignored():
     new, applied = repair_sentence("前➡<br>後", ("strip-arrows", "nonsense"))
     assert applied == ("strip-arrows",)
