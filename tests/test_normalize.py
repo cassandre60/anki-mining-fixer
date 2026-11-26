@@ -336,6 +336,17 @@ def test_normalize_parens_converts_speaker_tag_among_other_lines():
 
 
 def test_normalize_parens_converts_speaker_tag_prefixing_a_line():
+    # The real defect (note 1738961231466, the 浮く card): the speaker tag
+    # opens the line and the dialogue follows on the same line —
+    # ``(ヒロミ)最近...`` — so it must convert, not only a tag that fills the
+    # whole line.
+    text = "(ヒロミ)最近 ヤナギハラさんが一人なの 知ってた?"
+    new, applied = repair_sentence(text, ALL_RULES)
+    assert applied == ("normalize-parens",)
+    assert new == "（ヒロミ）最近 ヤナギハラさんが一人なの 知ってた?"
+
+
+def test_normalize_parens_converts_speaker_tag_followed_by_dialogue():
     # The real defect: a speaker tag that opens a line and is followed by the
     # dialogue on the same line — (ヒロミ)おはよう — must convert too, not only
     # a tag that fills the whole line (owner report 2026-11-26).
