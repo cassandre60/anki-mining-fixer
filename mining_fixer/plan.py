@@ -66,7 +66,7 @@ __all__ = [
     "scope_from_selection",
 ]
 
-PLAN_VERSION = 7
+PLAN_VERSION = 8
 
 OP_FILL = "fill"
 OP_REPLACE_SOURCE = "replace_source"
@@ -532,6 +532,7 @@ def _is_morph_match(
             if len(tokens) > 1 and not all(
                 t.pos == "助動詞"
                 or (t.pos == "動詞" and t.lemma in ("れる", "られる", "せる", "させる", "得る"))
+                or (t.pos == "名詞" and t.surface in ("さ", "み", "げ"))
                 for t in tokens[1:]
             ):
                 return False
@@ -940,6 +941,8 @@ def _bold_repair_for(
                         if ntok.pos == "助動詞" or (
                             ntok.pos == "動詞"
                             and ntok.lemma in ("れる", "られる", "せる", "させる", "得る")
+                        ) or (
+                            ntok.pos == "名詞" and ntok.surface in ("さ", "み", "げ")
                         ):
                             full_surface += ntok.surface
                             next_idx += 1
@@ -2111,17 +2114,26 @@ def _scene_writes_for(
                 )
             )
 
-    # Invariant: a Sentence (furigana) fill must never ship default-checked
-    # while its paired Sentence expansion is guarded — full-scene ruby under
-    # a fragment sentence is a broken card. The furigana fill may originate
-    # from the generic fill loop, so pair it here.
+    # Invariant: the scene's text and its audio ship together. When the paired
+    # Sentence expansion is guarded, neither the parent's whole-block clip nor
+    # its full-scene ruby may land under the untouched fragment sentence —
+    # playing a four-block clip under one block is exactly the mismatch Q-D16
+    # forbids (issues #15, #17). Picture, Translation and Source stay
+    # independent (Q-C9). The fills may originate from the generic fill loop,
+    # so pair them here.
     expansion = next(
         (w for w in writes if w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE), None
     )
     if expansion is not None and not expansion.default_checked:
+        paired_fields = {FURIGANA_FIELD, "Sentence Audio"}
         writes = [
             w
-            if not (w.field == "Sentence (furigana)" and w.op == OP_FILL and w.default_checked)
+            if not (
+                w.field in paired_fields
+                and w.op == OP_FILL
+                and w.default_checked
+                and w.source_note_id == expansion.source_note_id
+            )
             else replace(w, default_checked=False, badges=(*w.badges, "paired-with-expansion"))
             for w in writes
         ]
@@ -2719,7 +2731,15 @@ def build_plan(
         applied_fields = {w.field for w in target_writes if w.default_checked}
         if applied_fields:
             target_writes = [
-                w for w in target_writes if w.default_checked or w.field not in applied_fields
+                w
+                for w in target_writes
+                if w.default_checked
+                or w.field not in applied_fields
+                # A guarded expansion never applies by default, but it must
+                # stay proposed (Q-A10/Q-A11) even when a checked write
+                # covers the same field — otherwise the checked bold would
+                # silently swallow it (issue #17).
+                or (w.op == OP_EXPAND_SENTENCE and not w.default_checked)
             ]
         if not target_writes and target.note_id not in reasons:
             reasons[target.note_id] = "nothing-to-fill"

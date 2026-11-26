@@ -345,6 +345,12 @@ below, never as silent scope creep inside a coding session.
   (`test_normalize_parens_*`) and `test_plan.py` (Sentence-field-only scope
   and the shipped default).
 
+- **T35 — Nominalizer suffix in inflected bold (issue #17).** Tier 5 of
+  `_bold_repair_for` now consumes nominalizer suffixes (さ, み, げ) after an
+  inflected adjective, so an i-adjective with a nominalizer (愚かしさ) is
+  bolded as the full word instead of the bare stem (愚かし). `_is_morph_match`
+  recognises the same suffixes. Issue #17 direction 2 (partial).
+
 ## Backlog
 
 - **B7 — Bulk fix by dimensions** (the product direction; design in
