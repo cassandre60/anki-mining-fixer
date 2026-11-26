@@ -112,6 +112,11 @@ first, with the reason.
   between Latin/digit tokens, strips when adjacent to CJK or Japanese
   punctuation; unlike `strip-dash`, applies to both `Sentence` and its ruby
   `Sentence (furigana)`; owner addition 2026-11-21).
+   Added also: `normalize-parens` (speaker/stage tags — short parenthesised
+   names, the repo's speaker-paren notion — are rewritten to the
+   Japanese-style full-width `（name）`; pairs that are not speaker tags
+   (longer than 16 chars, nested or unbalanced) stay as mined; owner
+   addition 2026-11-25, issue #16).
   `<br>` line breaks and spacing are otherwise deliberately NOT rewritten —
   they are the sentence's pause structure (owner decision 2026-11-15;
   `flatten-div-blocks` only converts block *tags*, never an existing `<br>`;
@@ -123,7 +128,8 @@ first, with the reason.
   (`cloze-body`) occurs. The transformation is idempotent. By owner
   decision (2026-11-16) the dimension runs by default: the tool fixes on
   its own (`batch_repair_sentence: true`, rules `flatten-div-blocks`,
-  `strip-arrows`, `join-speaker-lines`, `strip-dash`, `strip-nbsp`); the
+  `strip-arrows`, `join-speaker-lines`, `strip-dash`, `strip-nbsp`,
+   `normalize-parens`); the
   config key remains the escape hatch to switch it off, and every guard
   above still applies.
 - **Q-D11 — Furigana regeneration uses Japanese Support as the only

@@ -168,12 +168,12 @@ you press Apply.
 - **Tools → "Mining Fixer: undo last run"** — restores exactly what the
   last apply replaced and removes exactly the tags it added.
 
-- **In the Reviewer: right-click → "Mining Fixer: fix current card"** —
+- **In the Reviewer: right-click → "Mining Fixer: fix current card" (or press the shortcut, default `Ctrl+Alt+F`)** —
   fixes the card currently under review without switching to the Browser.
 
 - **In the Browser: select notes → right-click → "Mining Fixer: batch-fix
-  selection…" (or press `Ctrl+Alt+F`)** — the bulk mode: select any number of cards, press **Fix N
-  note(s)**, done. On clean success, a non-blocking tooltip confirms completion
+  selection…" (or press the shortcut, default `Ctrl+Alt+F`)** — the bulk mode: select any number of cards, press **Fix N
+  note(s)**, done. The shortcut key can be changed or disabled via `"shortcut_fix"` in the add-on config (Tools → Add-ons → Config). On clean success, a non-blocking tooltip confirms completion
   without interrupting your flow with a blocking modal. The window stays quiet: one summary line with the counts —
   how many notes will be fixed and **what the run will do, dimension by
   dimension** (`16 writes: 8 furigana regenerated · 5 bold markup · 3 fill …`),

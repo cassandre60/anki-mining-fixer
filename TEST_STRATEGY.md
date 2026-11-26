@@ -47,6 +47,9 @@ not have and must never be given.
   `flatten-div-blocks` turns the real 淀む value's 39
   `<div>` wrappers into the four `<br>` lines with the bold intact, keeps
   inline parts and spacing, drops whitespace between block tags),
+  `normalize-parens` converts speaker/stage tags (short parenthesised names,
+  the repo's speaker-paren notion) to the Japanese-style full-width
+  `（name）`; longer or nested pairs stay (issue #16),
   `tests/test_plan.py` (checked write
   with rule badges, off without rules, exclusivity with expansion/bold,
   tested-word occurrence guard, unknown-rule warning; the strip is

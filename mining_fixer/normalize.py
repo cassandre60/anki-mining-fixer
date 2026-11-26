@@ -342,6 +342,7 @@ REPAIR_RULES = (
     "join-speaker-lines",
     "strip-dash",
     "strip-nbsp",
+    "normalize-parens",
 )
 
 #: The stray horizontal bar (U+2015) the Mining cards' Sentences carry — the
@@ -361,6 +362,60 @@ _NBSP_RE = re.compile(r"&nbsp;|\u00a0", re.IGNORECASE)
 def _strip_nbsp(text: str) -> str:
     s = _LATIN_NBSP_LATIN.sub(r"\1 \2", text)
     return _NBSP_RE.sub("", s)
+
+
+# --- paren style normalization ------------------------------------------------
+#
+# Subtitle dumps and mining tools sometimes carry generic (half-width) parens
+# where the Japanese style — full-width `（）` — is wanted (issue #16: the
+# 浮く card, speaker (ヒロミ)). The `normalize-parens` rule converts every
+# complete ASCII pair `(...)` to `（...）`, per line, EXCEPT speaker/stage
+# tags: a short parenthesised name alone on a line is the repo's speaker-paren
+# notion (QUALITY Q-D11) and stays as mined. Unbalanced or nested pairs are
+# left as-is. The transform is idempotent.
+
+#: A speaker/stage tag: a short ASCII parenthesised name alone on a line.
+#: Speakers are a short name in parens on their own line (the repo's
+#: speaker-paren notion); anything longer is not a speaker tag.
+_SPEAKER_TAG_RE = re.compile(r"^\([^\(\)\n]{1,16}\)$")
+
+#: A complete, non-nested ASCII pair: `(` ... `)` with no parens inside.
+_ASCII_PAIR_RE = re.compile(r"\(([^()]*)\)")
+
+
+def _is_speaker_tag_line(line: str) -> bool:
+    return bool(_SPEAKER_TAG_RE.match(line.strip()))
+
+
+def _convert_ascii_pairs(text: str) -> str:
+    # Nested pairs are left as-is (issue #16).
+    if re.search(r"\([^)]*\(", text):
+        return text
+    return _ASCII_PAIR_RE.sub(lambda m: "（" + m.group(1) + "）", text)
+
+
+def _normalize_parens(text: str) -> str:
+    """Convert speaker/stage tags to Japanese-style full-width parens.
+
+    Runs per line (``<br>`` / newline separated). A line that is a single
+    speaker/stage tag (a short parenthesised name alone on the line) has its
+    ASCII parens rewritten to ``（...）``; every other line — including
+    parens used for other purposes inside the sentence — is left untouched.
+    Unbalanced or already-full-width pairs are untouched. Pure.
+    """
+    if "(" not in text:
+        return text
+    parts = re.split(r"(<br\s*/?>|\n)", text, flags=re.IGNORECASE)
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:
+            out.append(part)
+            continue
+        if _is_speaker_tag_line(part):
+            out.append(_convert_ascii_pairs(part))
+        else:
+            out.append(part)
+    return "".join(out)
 
 
 # A continuation arrow only ever marks "the line continues", so it is
@@ -454,6 +509,12 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
       ``<br>`` line breaks they stand for (runs first: it can expose a
       line-tail arrow or a speaker tag for the rules below);
     - ``strip-arrows`` — remove continuation arrows only at line tails;
+    - ``normalize-parens`` — convert speaker/stage tags (short
+      parenthesised names, the repo's speaker-paren notion) to the
+      Japanese-style full-width ``（name）``; pairs that are not speaker
+      tags (longer than 16 chars, nested or unbalanced) stay as mined
+      (issue #16; runs before ``join-speaker-lines`` so a tag is converted
+      while it is still alone on its line).
     - ``join-speaker-lines`` — join a short speaker tag to its line;
     - ``strip-dash`` — remove the stray horizontal bars (U+2015) the Mining
       cards' Sentences carry (owner report 2026-11-20); the strip is
@@ -482,6 +543,11 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
         if stripped != s:
             applied.append("strip-arrows")
             s = stripped
+    if "normalize-parens" in wanted:
+        normalized = _normalize_parens(s)
+        if normalized != s:
+            applied.append("normalize-parens")
+            s = normalized
     if "join-speaker-lines" in wanted:
         joined = _SPEAKER_LINE_BREAK_RE.sub(r"\1", s)
         if joined != s:

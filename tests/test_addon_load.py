@@ -231,6 +231,59 @@ def test_browser_will_show_adds_shortcut_action(loaded_addon, monkeypatch):
     )
     hook[0](browser)
     assert len(actions) == 1
+    assert getattr(actions[0], "shortcut", None) == "Ctrl+Alt+F"
+
+
+def test_shortcut_customizable_via_config(loaded_addon, monkeypatch):
+    monkeypatch.setattr(
+        loaded_addon,
+        "_configured_shortcut",
+        lambda: "Ctrl+Shift+X",
+    )
+    menu = _Menu()
+    hook = sys.modules["aqt"].gui_hooks.browser_will_show_context_menu
+    hook[0](types.SimpleNamespace(selected_notes=lambda: [1]), menu)
+    assert menu.actions[1].shortcut == "Ctrl+Shift+X"
+
+
+def test_shortcut_can_be_disabled(loaded_addon, monkeypatch):
+    monkeypatch.setattr(
+        loaded_addon,
+        "_configured_shortcut",
+        lambda: "",
+    )
+    menu = _Menu()
+    hook = sys.modules["aqt"].gui_hooks.browser_will_show_context_menu
+    hook[0](types.SimpleNamespace(selected_notes=lambda: [1]), menu)
+    assert getattr(menu.actions[1], "shortcut", None) is None
+
+    actions = []
+    browser = types.SimpleNamespace(
+        selected_notes=lambda: [1],
+        addAction=lambda act: actions.append(act),
+    )
+    b_hook = sys.modules["aqt"].gui_hooks.browser_will_show
+    b_hook[0](browser)
+    assert len(actions) == 0
+
+
+def test_reviewer_shortcut_fires_in_review_mode(loaded_addon, monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_batch(ids=None, browser=None):
+        captured.update(ids=ids, browser=browser)
+
+    monkeypatch.setattr(loaded_addon, "_on_batch_selection", fake_batch)
+    aqt = sys.modules["aqt"]
+    aqt.mw.state = "review"
+    aqt.mw.reviewer = types.SimpleNamespace(card=types.SimpleNamespace(nid=77))
+    loaded_addon._on_review_shortcut()
+    assert captured["ids"] == [77]
+
+    captured.clear()
+    aqt.mw.state = "deckBrowser"
+    loaded_addon._on_review_shortcut()
+    assert captured == {}
 
 
 def test_preview_dialog_imports_with_real_anki():

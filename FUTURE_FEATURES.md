@@ -282,6 +282,7 @@ later. Status is one of *shipped*, *documented* (no code yet).
 | "Ideally there should be no notes that need humans" | `QUALITY.md` Q-C9, `BULK_FIX.md` §The target experience | shipped (left alone with a reason; no decision queue) |
 | A report a human can read, not a data dump | `report.render_batch_summary`, `README.md` | shipped |
 | Never crash the author's machine again | `AGENTS.md` §2 rules 2–3, Lessons Learned | shipped (rules in force) |
+| Fixing a selected card also fixes its neighbours (checkbox); do not re-fix a card that is already fixed | `IMPLEMENTATION_PLAN.md` B12 | documented (no code yet) |
 
 ## Other candidates (already listed elsewhere)
 
