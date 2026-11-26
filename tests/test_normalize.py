@@ -286,8 +286,8 @@ def test_repair_join_does_not_cross_a_blank_line():
     assert repair_sentence(text, ALL_RULES) == (text, ())
     # A single break after the tag still joins.
     new, applied = repair_sentence("微かな<br>(So dark)<br>手を", ALL_RULES)
-    assert applied == ("join-speaker-lines",)
-    assert new == "微かな<br>(So dark)手を"
+    assert applied == ("join-speaker-lines", "normalize-parens")
+    assert new == "微かな<br>（So dark）手を"
 
 
 def test_repair_unknown_rules_are_ignored():
