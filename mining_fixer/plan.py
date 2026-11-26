@@ -1671,12 +1671,12 @@ def _expansion_anchor(
     ):
         if name and _unique_anchor(parent_sentence, name):
             return name
-    # Morphological fallback (issue #17): the word may occur in the parent
-    # only as an inflected / nominalized form of the candidate.
+    # Morphological fallback (issues #15, #17): the word may occur in the
+    # parent only as an inflected / nominalized form. Use the parent token's
+    # lemma directly (re-tokenizing each surface can fail for multi-char
+    # surfaces).
     if morph_tokenizer is None:
         return ""
-    reading = candidate.get("reading") or ""
-    furigana = candidate.get("furigana") or ""
     parent_plain = strip_renderable(parent_sentence)
     try:
         tokens = morph_tokenizer(parent_plain)
@@ -1690,13 +1690,16 @@ def _expansion_anchor(
         name = strip_renderable(name or "").strip()
         if not name:
             continue
+        name_norm = kana_fold(norm_reading(name))
         surfaces: list[str] = []
         i = 0
         while i < len(tokens):
             tok = tokens[i]
-            if tok.pos in ("動詞", "形容詞", "名詞", "副詞", "連体詞") and _is_morph_match(
-                tok.surface, name, reading, morph_tokenizer, furigana
-            ):
+            tok_lemma_norm = kana_fold(norm_reading(tok.lemma))
+            matches = tok.pos in ("動詞", "形容詞", "名詞", "副詞", "連体詞") and (
+                tok.lemma == name or tok_lemma_norm == name_norm
+            )
+            if matches:
                 full = tok.surface
                 j = i + 1
                 while j < len(tokens):
