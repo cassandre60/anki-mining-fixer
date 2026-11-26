@@ -230,6 +230,87 @@ def test_expansion_inherits_hand_corrected_sentence_when_cloze_body_empty():
     assert not pass2.writes
 
 
+def test_expansion_anchors_on_inflected_verb_surface_issue_15():
+    # Issue #15: A card for 夢見る (1764854219074) has fragment sentence
+    # "［ボニーが　くまと夢見た<br>一番なりたかった未来］". Parent has
+    # 4-block recap with 夢見た. _expansion_anchor must resolve the inflected
+    # form 夢見た via morph_tokenizer, retarget the bold, and ship both
+    # the expansion and Sentence Audio checked (Q-D16).
+    parent_sent = (
+        "［ボニーたちのエッグヘッド脱出を阻む<br>五老星の猛攻］<br>"
+        "［追いつめられたボニーの耳に<br>くまと踊った解放のドラムが<br>鳴り響く］<br>"
+        "［ボニーが　くまと夢見た<br>一番なりたかった未来］<br>"
+        "［今　新たな力が目覚める！］"
+    )
+    child_sent = "［ボニーが　くまと夢見た<br>一番なりたかった未来］"
+
+    parent = rec(
+        1764854118187,
+        {
+            "Expression": "阻む",
+            "reading": "はばむ",
+            "Sentence": parent_sent,
+            "Sentence Audio": "[sound:egghead_sp11.mp3]",
+            "Picture": "<img src='egghead_sp11.jpg'>",
+            "Source": "[ASW] One Piece - Egghead SP11 [1080p HEVC][EA157CAC]",
+            "cloze-body": "",
+        },
+    )
+    child = rec(
+        1764854219074,
+        {
+            "Expression": "夢見る",
+            "reading": "ゆめみる",
+            "Sentence": child_sent,
+            "Sentence Audio": "",
+            "Picture": "",
+            "Source": "asbplayer://blob",
+            "cloze-body": "",
+        },
+    )
+
+    def mock_tok(text: str):
+        if "夢見た" in text:
+            return [
+                MorphToken("阻む", "動詞", "阻む", "ハバム"),
+                MorphToken("夢見", "動詞", "夢見る", "ユメミ"),
+                MorphToken("た", "助動詞", "た", "タ"),
+                MorphToken("未来", "名詞", "未来", "ミライ"),
+            ]
+        return []
+
+    plan = build_plan(
+        [parent, child], CFG, scope_note_ids=[child.note_id], morph_tokenizer=mock_tok
+    )
+    sent_writes = [
+        w
+        for w in plan.writes
+        if w.note_id == child.note_id and w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE
+    ]
+    assert len(sent_writes) == 1
+    assert sent_writes[0].default_checked
+    assert "<b>夢見た</b>" in sent_writes[0].new_value
+    assert "bold-retargeted-to-expression" in sent_writes[0].badges
+
+    audio_writes = [
+        w for w in plan.writes if w.note_id == child.note_id and w.field == "Sentence Audio"
+    ]
+    assert len(audio_writes) == 1
+    assert audio_writes[0].default_checked
+    assert "paired-with-expansion" not in audio_writes[0].badges
+
+    # Fixpoint (Q-A2): once applied, second pass writes 0
+    applied_fields = dict(child.fields)
+    for w in plan.writes:
+        if w.default_checked:
+            applied_fields[w.field] = w.new_value
+    fixed_child = rec(child.note_id, applied_fields, tags=child.tags)
+    plan2 = build_plan(
+        [parent, fixed_child], CFG, scope_note_ids=[child.note_id], morph_tokenizer=mock_tok
+    )
+    assert not plan2.writes
+
+
 def test_checked_only_apply_keeps_guarded_work_reachable():
     """Q-A11: a guarded row skipped by a run is still owed on the next one.
 
@@ -2932,6 +3013,48 @@ def test_bold_repair_covers_full_inflected_verb_not_bare_stem():
     assert "bold-added-to-inflected-form" in writes[0].badges
 
     # Fixpoint (Q-A2): second pass recognizes <b>襲われる</b> and writes nothing
+    target_pass2 = rec(1, {**target.fields, "Sentence": writes[0].new_value})
+    plan2 = build_plan([target_pass2], CFG, scope_note_ids=[1], morph_tokenizer=mock_tok)
+    assert not [w for w in plan2.writes if w.note_id == 1 and w.field == "Sentence"]
+
+
+def test_bold_repair_covers_nominalized_adjective_span():
+    # Issue #17: When MeCab splits a nominalized adjective (愚かしい -> 愚かし + さ),
+    # Tier 5 must bold the full span <b>愚かしさ</b> rather than bare stem <b>愚かし</b>さ.
+    target = rec(
+        1,
+        {
+            "Expression": "愚かしい",
+            "reading": "おろかしい",
+            "Sentence": "殺される愚かしさ",
+        },
+    )
+
+    def mock_tok(text: str):
+        if text in ("殺される愚かしさ", "殺される<b>愚かしさ</b>"):
+            return [
+                MorphToken("殺さ", "動詞", "殺す", "コロサ"),
+                MorphToken("れる", "動詞", "れる", "レル"),
+                MorphToken("愚かし", "形容詞", "愚かしい", "オロカシ"),
+                MorphToken("さ", "名詞", "さ", "サ"),
+            ]
+        if text == "愚かしさ":
+            return [
+                MorphToken("愚かし", "形容詞", "愚かしい", "オロカシ"),
+                MorphToken("さ", "名詞", "さ", "サ"),
+            ]
+        if text == "愚かし":
+            return [MorphToken("愚かし", "形容詞", "愚かしい", "オロカシ")]
+        return []
+
+    plan = build_plan([target], CFG, scope_note_ids=[1], morph_tokenizer=mock_tok)
+    writes = [w for w in plan.writes if w.note_id == 1 and w.field == "Sentence"]
+    assert len(writes) == 1
+    assert writes[0].op == OP_BOLD_CLOZE_WORD
+    assert writes[0].new_value == "殺される<b>愚かしさ</b>"
+    assert "bold-added-to-inflected-form" in writes[0].badges
+
+    # Fixpoint (Q-A2): second pass recognizes <b>愚かしさ</b> and writes nothing
     target_pass2 = rec(1, {**target.fields, "Sentence": writes[0].new_value})
     plan2 = build_plan([target_pass2], CFG, scope_note_ids=[1], morph_tokenizer=mock_tok)
     assert not [w for w in plan2.writes if w.note_id == 1 and w.field == "Sentence"]
