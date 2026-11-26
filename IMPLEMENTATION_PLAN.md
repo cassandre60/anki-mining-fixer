@@ -130,6 +130,7 @@ below, never as silent scope creep inside a coding session.
 | T31 | `test_plan.py` (`test_expansion_inherits_hand_corrected_sentence_when_cloze_body_empty`), `test_report_summary.py` (`bold-retargeted-to-expression` badge coverage); closes #10 |
 | T32 | `tests/test_addon_load.py` (shortcuts, reviewer action), `tests/test_notify_collection_changed.py` (multi-card editor sync) |
 | T33 | `test_plan.py` (`test_bold_repair_covers_full_inflected_verb_not_bare_stem`); closes #11 |
+| T34 | `test_normalize.py` (`test_normalize_parens_*`), `test_plan.py` (Sentence-field-only scope, shipped default); issue #16 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -330,12 +331,18 @@ below, never as silent scope creep inside a coding session.
   multiple cards reloads the active editor note and prevents stale `saveNow()`
   overwrites on Browser close (Q-A9). Pinned in `test_addon_load.py` and
   `test_notify_collection_changed.py`.
-- **T33 — Full inflected verb bolding across auxiliary tokens (Issue #11).**
-  Tier 5 of `_bold_repair_for` previously placed bold only on the single matching
-  lemma token (`襲わ`), cutting inflected verbs in half when MeCab splits auxiliary
-  tokens (`れる`, `た`, `ない`, `ます`, etc.). Both `_bold_repair_for` and `_is_morph_match`
-  now consume adjacent auxiliary verb/particles, bolding the full word (`襲われる`)
-  and recognizing the full span on subsequent runs. Closes Issue #11.
+- **T34 — Sentence speaker-paren style (issue #16, owner report 2026-11-25).**
+  The Sentence field carried generic (half-width) speaker parens (`(葉子)`) where
+  the Japanese style (`（葉子）`) is wanted. `normalize.repair_sentence` gained
+  the `normalize-parens` rule (added to `REPAIR_RULES`; the shipped
+  `config.json` ships it — automatic mode), rewriting speaker/stage tags (short
+  parenthesised names, the repo's speaker-paren notion) to full-width `（name）`;
+  pairs that are not speaker tags (longer than 16 chars, nested or unbalanced)
+  stay as mined. The write is the existing `repair_sentence` op
+  (`OP_REPAIR_SENTENCE`): checked, badge `normalize-parens`, guarded by the
+  tested-word occurrence guard (Q-D10). Pinned in `test_normalize.py`
+  (`test_normalize_parens_*`) and `test_plan.py` (Sentence-field-only scope
+  and the shipped default).
 
 ## Backlog
 
@@ -421,6 +428,93 @@ below, never as silent scope creep inside a coding session.
 - **B5 — Review ergonomics for guards.** Shipped as T21 (badge tooltips,
   detail-pane explanations, filter bar, check-column guard-reason tooltips with
   manual override tracking).
+- **B12 — Fix a card's neighbours; do not re-fix a fixed card** (owner ask
+  2026-11-25; decisions 2026-11-26). **Design only — not started.** The three
+  owner requests, and the choices made, are recorded here so implementation
+  follows them instead of re-litigating.
+
+  **The requests.**
+  1. A checkbox: *fixing a card fixes its neighbours* (when on).
+  2. *No need to re-fix a fixed card* — the tag question: is `applied_tag`
+     enough, or must the deck be re-planned?
+  3. The add-on must **explain all of this to the user in plain language** —
+     the feature is invisible unless the UI says what it does.
+
+  **Where it stands today (read from the code, 2026-11-26).**
+  - **Scope is a hard cap (Q-C6).** The Tools entry targets the newest
+    `preview_last_n` notes; the Browser entry targets exactly the selection;
+    every other note of the configured deck stays a *source* only
+    (`plan.build_plan(scope_note_ids=...)`, `collection_io.plan_preview`). A
+    neighbour is never pulled into the target set — the gap request 1 names.
+  - **The Apply is already a fixpoint (Q-A2).**
+    `collection_io.apply_plan_to_fixpoint` re-plans the *same scope* on the real
+    post-write state, so a cascade *inside* the selection (a source fixed here →
+    a selected child fills) is resolved in one Apply; a neighbour outside the
+    selection is not touched.
+  - **"Neighbour" already has a precise meaning.** Scene siblings — an enriched
+    card (has `Sentence Audio`) whose normalized `Sentence` *contains* the
+    card's, found by `matching.find_scene_parents` within ±`window_days`; and
+    word siblings — same `normalize.word_key(Expression, reading, furigana)`
+    (`matching.word_groups`).
+  - **Already-applied work is detected by value, not by tag.**
+    `applier._already_applied` skips a row whose field already holds the planned
+    value; `_is_stale` reports a conflict. `applied_tag` (`auto-filled`) is
+    added to every note a run writes (`applier.decide`) and never propagates
+    (`plan._reserved_tags`), but `plan.build_plan` today only ever *skips* notes
+    carrying `optout_tag` (`no-autofill`); `auto-filled` is not consulted by the
+    planner at all.
+
+  **Decisions (owner, 2026-11-26).**
+  1. **Neighbour = same scene line only.** A subtitle mined into several cards;
+     selecting one also targets the others from that same line (the scene
+     siblings above). **Same-word** and **same-episode/time** neighbours are
+     explicitly out of scope for now — they can become extra options later.
+  2. **Checkbox default ON.** Safe because the set is the bounded same-line one
+     and the preview still shows every row before the user presses Apply.
+  3. **Tag semantics are split.**
+     - `auto-filled` = *"the add-on is finished with this card"*. Added **only
+       when the card ends the run with nothing left to do** (no skipped,
+       guarded or residual rows). A half-fixed card is **not** tagged, so the
+       tag is trustworthy.
+     - `no-autofill` (the existing `optout_tag`) = the permanent lock ("hands
+       off, I manage this card"); the planner already never targets it.
+     - `auto-filled` stays a **hint/filter** ("hide cards already fixed"), never
+       a reason to skip planning. Correctness remains the value-based plan +
+       fixpoint (Q-A2); the whole deck is never re-scanned — only in-scope cards
+       are planned (Q-P1).
+
+  **Explain it to the user (request 3).** The add-on must:
+  - label the checkbox plainly ("Also fix the other cards mined from the same
+    subtitle line");
+  - say so in the header when the scope grows ("fixing N card(s); M neighbour(s)
+    added by propagation"), because the preview is the truth (Q-C4);
+  - explain the two tags in the preview and `README.md` — what `auto-filled`
+    means, what `no-autofill` does, how to use each;
+  - use badges/tooltips (the T21 pattern) for any new prop-sourced row, so
+    nothing arrives unexplained.
+
+  **Implementation sketch.** A pure
+  `plan.expand_scope_with_neighbours(records, cfg, selected_ids) -> list[int]`,
+  called from `plan_preview` when the option is on (pure core, Q-S1); a
+  `fix_neighbours` config key for the default; a dialog checkbox that re-plans
+  on toggle (the plan is built at dialog open). Tagging moves to the end of
+  `apply_plan_to_fixpoint`: add `applied_tag` only to notes that finish clean.
+  Guardrails: bounded to `window_days`/`MAX_WINDOW_MS` (Q-C2); `optout_tag`
+  neighbours stay excluded (Q-C5); the run log already covers the added notes
+  (same Undo). This is **not** `batch_scene_propagation` — that gate only turns
+  the scene *fills* on/off inside the existing scope.
+
+  **Open decisions.**
+  1. How "nothing left to do" is judged per note: after the whole Apply, on
+     notes that have no residual rows and no owed guarded rows (a note can be
+     clean at pass 2 once a neighbour supplied it).
+  2. The `auto-filled` filter's exact home (preview-only filter vs. a Tools
+     scope option); default off.
+  3. Whether propagated notes appear as a distinct "added by propagation" group
+     in the preview.
+  When built: update `README.md` (usage), `QUALITY.md` (the tag semantics as an
+  invariant) and `TEST_STRATEGY.md` (scope-expansion + clean-tagging tests) in
+  the same commit.
 
 ## Working agreements (from experience)
 
