@@ -366,43 +366,30 @@ def _strip_nbsp(text: str) -> str:
 
 # --- paren style normalization ------------------------------------------------
 #
-# Subtitle dumps and mining tools sometimes carry generic (half-width) parens
-# where the Japanese style — full-width `（）` — is wanted (issue #16: the
-# 浮く card, speaker (ヒロミ)). The `normalize-parens` rule converts every
-# complete ASCII pair `(...)` to `（...）`, per line, EXCEPT speaker/stage
-# tags: a short parenthesised name alone on a line is the repo's speaker-paren
-# notion (QUALITY Q-D11) and stays as mined. Unbalanced or nested pairs are
-# left as-is. The transform is idempotent.
+# Subtitle dumps write Sentences with generic (half-width) speaker parens
+# where the Japanese style — full-width `（）` — is wanted (owner report: the
+# 浮く card, speaker (ヒロミ)). The `normalize-parens` rule converts
+# speaker/stage tags (short parenthesised names, the repo's speaker-paren
+# notion) to `（name）`; pairs that are not speaker tags (longer than 16
+# chars, nested or unbalanced) stay as mined. Pure.
 
-#: A speaker/stage tag: a short ASCII parenthesised name alone on a line.
-#: Speakers are a short name in parens on their own line (the repo's
-#: speaker-paren notion); anything longer is not a speaker tag.
-_SPEAKER_TAG_RE = re.compile(r"^\([^\(\)\n]{1,16}\)$")
-
-#: A complete, non-nested ASCII pair: `(` ... `)` with no parens inside.
-_ASCII_PAIR_RE = re.compile(r"\(([^()]*)\)")
-
-
-def _is_speaker_tag_line(line: str) -> bool:
-    return bool(_SPEAKER_TAG_RE.match(line.strip()))
-
-
-def _convert_ascii_pairs(text: str) -> str:
-    # Nested pairs are left as-is (issue #16).
-    if re.search(r"\([^)]*\(", text):
-        return text
-    return _ASCII_PAIR_RE.sub(lambda m: "（" + m.group(1) + "）", text)
+#: A speaker/stage tag: a short parenthesised name in either style — the
+#: repo's speaker-paren notion (the speaker tiers in `plan._bold_repair`;
+#: QUALITY Q-D11 describes user-authored speaker context as ``（名前）``).
+#: Pairs longer than 16 chars or with nested parens are not speaker tags.
+_SPEAKER_TAG_RE = re.compile(r"[（(][^()（）\n]{1,16}[)）]")
 
 
 def _normalize_parens(text: str) -> str:
-    """Convert complete ASCII paren pairs to Japanese-style full-width parens.
+    """Convert speaker/stage tags to Japanese-style full-width parens.
 
-    Runs per line (``<br>`` / newline separated). A line that is a single
-    speaker/stage tag (a short parenthesised name alone on the line) is left
-    as mined. Every other complete, non-nested ASCII pair ``(...)`` becomes
-    ``（...）``; unbalanced or already-full-width pairs are untouched. Pure.
+    Every speaker/stage tag (a short parenthesised name, either style — see
+    :data:`_SPEAKER_TAG_RE`) is rewritten to ``（name）``; pairs that are
+    not speaker tags (longer, nested or unbalanced) stay as they are, and
+    already-full-width pairs are unchanged — the transform is idempotent.
+    Pure.
     """
-    if "(" not in text or ")" not in text:
+    if "(" not in text and "（" not in text:
         return text
     parts = re.split(r"(<br\s*/?>|\n)", text, flags=re.IGNORECASE)
     out: list[str] = []
@@ -410,10 +397,10 @@ def _normalize_parens(text: str) -> str:
         if i % 2 == 1:
             out.append(part)
             continue
-        if _is_speaker_tag_line(part):
+        if re.search(r"\([^)]*\(", part) or re.search(r"（[^）]*（", part):
             out.append(part)
         else:
-            out.append(_convert_ascii_pairs(part))
+            out.append(_SPEAKER_TAG_RE.sub(lambda m: "（" + m.group(0)[1:-1] + "）", part))
     return "".join(out)
 
 
@@ -513,10 +500,11 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
       cards' Sentences carry (owner report 2026-11-20); the strip is
       Sentence-field scoped — callers that repair the ruby exclude it
       (``RUBY_EXCLUDED_RULES``).
-    - ``normalize-parens`` — convert complete ASCII paren pairs
-      ``(...)`` to the Japanese-style full-width ``（...）``, per line;
-      speaker/stage tags (a short parenthesised name alone on a line) stay
-      as mined, and unbalanced or nested pairs are untouched (issue #16).
+    - ``normalize-parens`` — convert speaker/stage tags (short
+      parenthesised names, the repo's speaker-paren notion) to the
+      Japanese-style full-width ``（name）``; pairs that are not speaker
+      tags (longer than 16 chars, nested or unbalanced) stay as mined
+      (issue #16).
 
     ``<br>`` line breaks and spacing are otherwise deliberately NOT rewritten
     (owner decision 2026-11-15; ``flatten-div-blocks`` is the owner's
