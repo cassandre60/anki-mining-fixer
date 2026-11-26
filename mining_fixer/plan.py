@@ -938,11 +938,13 @@ def _bold_repair_for(
                     next_idx = idx + 1
                     while next_idx < len(tokens):
                         ntok = tokens[next_idx]
-                        if ntok.pos == "助動詞" or (
-                            ntok.pos == "動詞"
-                            and ntok.lemma in ("れる", "られる", "せる", "させる", "得る")
-                        ) or (
-                            ntok.pos == "名詞" and ntok.surface in ("さ", "み", "げ")
+                        if (
+                            ntok.pos == "助動詞"
+                            or (
+                                ntok.pos == "動詞"
+                                and ntok.lemma in ("れる", "られる", "せる", "させる", "得る")
+                            )
+                            or (ntok.pos == "名詞" and ntok.surface in ("さ", "み", "げ"))
                         ):
                             full_surface += ntok.surface
                             next_idx += 1
