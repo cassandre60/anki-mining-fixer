@@ -131,6 +131,7 @@ below, never as silent scope creep inside a coding session.
 | T32 | `tests/test_addon_load.py` (shortcuts, reviewer action), `tests/test_notify_collection_changed.py` (multi-card editor sync) |
 | T33 | `test_plan.py` (`test_bold_repair_covers_full_inflected_verb_not_bare_stem`); closes #11 |
 | T34 | `test_normalize.py` (`test_normalize_parens_*`), `test_plan.py` (Sentence-field-only scope, shipped default); issue #16 |
+| T35 | `test_plan.py` (`test_expansion_anchors_on_inflected_verb_surface_issue_15`, `test_bold_repair_covers_nominalized_adjective_span`); closes #15, #17 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -345,11 +346,15 @@ below, never as silent scope creep inside a coding session.
   (`test_normalize_parens_*`) and `test_plan.py` (Sentence-field-only scope
   and the shipped default).
 
-- **T35 — Nominalizer suffix in inflected bold (issue #17).** Tier 5 of
-  `_bold_repair_for` now consumes nominalizer suffixes (さ, み, げ) after an
-  inflected adjective, so an i-adjective with a nominalizer (愚かしさ) is
-  bolded as the full word instead of the bare stem (愚かし). `_is_morph_match`
-  recognises the same suffixes. Issue #17 direction 2 (partial).
+- **T35 — Inflected expansion anchors and nominalized adjective bolding (issues #15, #17).**
+  `_expansion_anchor` now uses in-context morphological token matching (`_matches_morph_token`)
+  and suffix consumption (`_consume_inflected_span`) instead of isolating tokens and stripping
+  context. This allows word-mined cards to anchor expansions on inflected verbs (e.g. `夢見る`
+  anchoring on `夢見た`, issue #15) and nominalized adjectives (`愚かしい` anchoring on `愚かしさ`,
+  issue #17), shipping both the expansion and `Sentence Audio` checked as a unit (Q-D16).
+  In addition, `_bold_repair_for` and `_is_morph_match` now consume nominalizing adjective
+  suffixes (`さ`, `み`, `げ`), bolding the full word (`<b>愚かしさ</b>`) and rejecting bare stems
+  (`<b>愚かし</b>`). Closes issues #15 and #17.
 
 ## Backlog
 

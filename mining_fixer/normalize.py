@@ -343,6 +343,7 @@ REPAIR_RULES = (
     "strip-dash",
     "strip-nbsp",
     "normalize-parens",
+    "strip-inline-readings",
 )
 
 #: The stray horizontal bar (U+2015) the Mining cards' Sentences carry — the
@@ -503,12 +504,15 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
       ``<br>`` line breaks they stand for (runs first: it can expose a
       line-tail arrow or a speaker tag for the rules below);
     - ``strip-arrows`` — remove continuation arrows only at line tails;
-    - ``normalize-parens`` — convert speaker/stage tags (short
-      parenthesised names, the repo's speaker-paren notion) to the
-      Japanese-style full-width ``（name）``; pairs that are not speaker
-      tags (longer than 16 chars, nested or unbalanced) stay as mined
-      (issue #16; runs before ``join-speaker-lines`` so a tag is converted
-      while it is still alone on its line).
+    - ``normalize-parens`` — convert complete ASCII paren pairs
+      ``(...)`` to the Japanese-style full-width ``（...）``, per line;
+      speaker/stage tags (a short parenthesised name alone on a line) stay
+      as mined, and unbalanced or nested pairs are untouched (issue #16).
+    - ``strip-inline-readings`` — remove inline reading annotations
+      ``kanji(reading)`` from the Sentence, recording the show-specific
+      reading for the ruby override (issue #9). Atomic with
+      ``regenerate_furigana``: the sentence is only rewritten when the
+      override can be applied.
     - ``join-speaker-lines`` — join a short speaker tag to its line;
     - ``strip-dash`` — remove the stray horizontal bars (U+2015) the Mining
       cards' Sentences carry (owner report 2026-11-20); the strip is
@@ -557,6 +561,11 @@ def repair_sentence(text: str, rules: Iterable[str]) -> tuple[str, tuple[str, ..
         if stripped != s:
             applied.append("strip-nbsp")
             s = stripped
+    if "strip-inline-readings" in wanted:
+        cleaned, anns = detect_inline_readings(s)
+        if anns and cleaned != s:
+            applied.append("strip-inline-readings")
+            s = cleaned
     if not applied:
         return text, ()
     return s, tuple(applied)
