@@ -2657,6 +2657,10 @@ def build_plan(
         # Sentence Audio is fill-only (QUALITY Q-D1): a card that already has its
         # own audio is a scene unit and is never overwritten.
         for w in scene_writes:
+            if inline_anns and w.op == OP_EXPAND_SENTENCE:
+                # Defer scene completion so the inline strip can run this pass;
+                # the expansion re-plans next pass once the sentence is clean.
+                continue
             if w.source_note_id:
                 parent_usage[w.source_note_id] = parent_usage.get(w.source_note_id, 0) + 1
             if media_exists is not None and w.op == OP_FILL:
