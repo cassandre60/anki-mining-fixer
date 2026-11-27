@@ -3,14 +3,21 @@
 Qt-facing module. It never decides anything itself — the plan comes from
 ``plan.py`` and the re-assertion from ``applier.py`` — so what the user sees
 is exactly what is written.
+
+Planning runs on Anki's background task manager (``plan_preview_in_background``)
+and the table is a ``QAbstractTableModel``, so toggling the scope checkbox does
+no SQLite, MeCab or widget construction on the UI thread. Results are
+coalesced and cached per scope state by :class:`mining_fixer.replan.ReplanQueue`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from aqt.qt import (
     QAbstractItemView,
+    QAbstractTableModel,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -18,15 +25,17 @@ from aqt.qt import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QModelIndex,
     QPlainTextEdit,
     QPushButton,
+    QSortFilterProxyModel,
     Qt,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QTabWidget,
     QTimer,
     QVBoxLayout,
     QWidget,
+    pyqtSignal,
 )
 from aqt.utils import showCritical, showInfo, tooltip
 
@@ -40,17 +49,17 @@ from .collection_io import (
     media_exists,
     notify_collection_changed,
     plan_preview,
+    plan_preview_in_background,
     preflight_fields,
     read_state,
     write_run_log,
 )
 from .matching import NoteRecord
 from .plan import PlannedWrite
+from .replan import ReplanQueue, ReplanRequest
 from .report import OP_LABELS, badge_explanation, guard_reason
 
 _HEADERS = ["", "note", "field", "change", "source", "badges"]
-_CHECK_ROLE = int(Qt.ItemDataRole.UserRole) + 1
-_KEY_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 
 #: The scope checkbox (B12), worded so the user knows exactly what it widens.
 NEIGHBOUR_LABEL = "Also fix the other cards mined from the same subtitle line"
@@ -71,6 +80,195 @@ def _change_summary(write: PlannedWrite) -> str:
     return _clip(write.new_value)
 
 
+class _ChangesModel(QAbstractTableModel):
+    """One plan as model data; a reset is O(rows), never widget creation.
+
+    Check state is data, not a ``QTableWidgetItem``: manual ticks survive every
+    re-plan (``_overrides``) and the view only paints the visible rows.
+    """
+
+    checkStateChanged = pyqtSignal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cfg: dict = {}
+        self._writes: tuple[PlannedWrite, ...] = ()
+        self._checks: dict[tuple[int, str], bool] = {}
+        self._overrides: dict[tuple[int, str], bool] = {}
+        self._labels: list[str] = []
+        self._summaries: list[str] = []
+        self._sources: list[str] = []
+        self._badges: list[str] = []
+        self._check_tips: list[str] = []
+        self._badge_tips: list[str] = []
+
+    def set_plan(
+        self,
+        writes: Sequence[PlannedWrite],
+        records: Mapping[int, NoteRecord],
+        cfg: dict,
+    ) -> None:
+        self.beginResetModel()
+        try:
+            self._cfg = cfg
+            self._writes = tuple(writes)
+            self._checks = {}
+            self._labels = []
+            self._summaries = []
+            self._sources = []
+            self._badges = []
+            self._check_tips = []
+            self._badge_tips = []
+            seen: set[int] = set()
+            for write in self._writes:
+                key = (write.note_id, write.field)
+                checked = self._overrides.get(key, bool(write.default_checked))
+                self._checks[key] = checked
+
+                record = records.get(write.note_id)
+                expression = record.get("Expression") if record is not None else ""
+                first = write.note_id not in seen
+                seen.add(write.note_id)
+                self._labels.append(
+                    f"{expression or '(no expression)'} · {write.note_id}" if first else ""
+                )
+                self._summaries.append(_change_summary(write))
+                self._sources.append(f"note {write.source_note_id}" if write.source_note_id else "")
+                self._badges.append(", ".join(write.badges))
+                self._check_tips.append(self._check_tip(write, checked))
+                self._badge_tips.append(
+                    "\n".join(f"• {badge_explanation(b)}" for b in write.badges)
+                    if write.badges
+                    else ""
+                )
+        finally:
+            self.endResetModel()
+
+    def _check_tip(self, write: PlannedWrite, checked: bool) -> str:
+        default = bool(write.default_checked)
+        reason = guard_reason(write, self._cfg)
+        if checked:
+            return "Checked by default" if default else f"Checked manually (originally: {reason})"
+        return reason if not default else "Unchecked manually"
+
+    def rowCount(self, parent=QModelIndex()) -> int:  # noqa: B008 - Qt signature
+        return 0 if parent.isValid() else len(self._writes)
+
+    def columnCount(self, parent=QModelIndex()) -> int:  # noqa: B008 - Qt signature
+        return 0 if parent.isValid() else len(_HEADERS)
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+            and 0 <= section < len(_HEADERS)
+        ):
+            return _HEADERS[section]
+        return None
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if not index.isValid() or not (0 <= index.row() < len(self._writes)):
+            return None
+        row, column = index.row(), index.column()
+        write = self._writes[row]
+        if role == Qt.ItemDataRole.CheckStateRole and column == 0:
+            checked = self._checks.get((write.note_id, write.field), False)
+            return Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        if role == Qt.ItemDataRole.DisplayRole:
+            if column == 0:
+                return ""
+            if column == 1:
+                return self._labels[row]
+            if column == 2:
+                return write.field
+            if column == 3:
+                return self._summaries[row]
+            if column == 4:
+                return self._sources[row]
+            if column == 5:
+                return self._badges[row]
+            return None
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if column == 0:
+                return self._check_tips[row]
+            if column == 5:
+                return self._badge_tips[row] or None
+        return None
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() == 0:
+            flags |= Qt.ItemFlag.ItemIsUserCheckable
+        return flags
+
+    def setData(
+        self,
+        index: QModelIndex,
+        value: Any,
+        role: int = Qt.ItemDataRole.EditRole,
+    ) -> bool:
+        if role != Qt.ItemDataRole.CheckStateRole or not index.isValid():
+            return False
+        if index.column() != 0 or not (0 <= index.row() < len(self._writes)):
+            return False
+        write = self._writes[index.row()]
+        key = (write.note_id, write.field)
+        checked = Qt.CheckState(value) == Qt.CheckState.Checked
+        self._checks[key] = checked
+        self._overrides[key] = checked
+        self._check_tips[index.row()] = self._check_tip(write, checked)
+        self.dataChanged.emit(
+            index,
+            index,
+            [Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.ToolTipRole],
+        )
+        self.checkStateChanged.emit()
+        return True
+
+    def checked_keys(self) -> list[tuple[int, str]]:
+        return [key for key, checked in self._checks.items() if checked]
+
+    def write_at(self, row: int) -> PlannedWrite:
+        return self._writes[row]
+
+
+class _ChangesFilter(QSortFilterProxyModel):
+    """Case-insensitive substring filter over note, field, change and badges."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._needle = ""
+
+    def set_needle(self, text: str) -> None:
+        needle = (text or "").strip().lower()
+        if needle != self._needle:
+            self._needle = needle
+            self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
+        if not self._needle:
+            return True
+        model = self.sourceModel()
+        if model is None:
+            return True
+        for column in (1, 2, 3, 5):
+            value = model.data(model.index(source_row, column), Qt.ItemDataRole.DisplayRole)
+            if self._needle in str(value or "").lower():
+                return True
+        return False
+
+
 class PreviewDialog(QDialog):
     """The add-on's main window: one row per planned write, checked by default
     exactly as the plan says (guarded rows arrive unchecked)."""
@@ -85,180 +283,269 @@ class PreviewDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.col = col
-        self.cfg = cfg if cfg is not None else load_config()
+        self.cfg = dict(cfg) if cfg is not None else load_config()
         self.browser = browser
         self.scope_note_ids = list(scope_note_ids) if scope_note_ids is not None else None
-        self.preview: Preview = plan_preview(col, self.cfg, self.scope_note_ids)
         self.pending: tuple | None = None
-        self.checks: dict[tuple[int, str], bool] = {}
+        self.preview: Preview | None = None
+        self.records_by_id: dict[int, NoteRecord] = {}
+        self._queue: ReplanQueue[Preview] = ReplanQueue()
+        self._closed = False
+        self._busy = False
+        self._body_built = False
+        self._error_label: QLabel | None = None
 
         self.setWindowTitle("Mining Fixer — preview")
         self.resize(1180, 680)
         self.root = QVBoxLayout(self)
-        self.content: QWidget | None = None
-        self._install_content()
 
-    def _install_content(self) -> None:
-        """Build the dialog body for the current plan (re-run on a scope change)."""
-        self.content = QWidget()
-        self.content_layout = QVBoxLayout(self.content)
-        self.root.addWidget(self.content)
-        self._populate()
-
-    def _replan(self) -> None:
-        """Re-plan for the new scope; the preview is always the truth (Q-C4)."""
-        self.cfg = {**self.cfg, "fix_neighbours": bool(self.neighbour_box.isChecked())}
-        self.preview = plan_preview(self.col, self.cfg, self.scope_note_ids)
-        self.checks = {}
-        old = self.content
-        if old is not None:
-            old.setParent(None)
-            old.deleteLater()
-        self._install_content()
-
-    def _populate(self) -> None:
-        inner = self.content_layout
-        neighbour_box = QCheckBox(NEIGHBOUR_LABEL)
-        neighbour_box.setChecked(bool(self.cfg.get("fix_neighbours", True)))
-        neighbour_box.setToolTip(
+        self.neighbour_box = QCheckBox(NEIGHBOUR_LABEL)
+        self.neighbour_box.setChecked(bool(self.cfg.get("fix_neighbours", True)))
+        self.neighbour_box.setToolTip(
             "Also fixes the cards mined from the same subtitle line (they share "
             "this scene's Sentence Audio), and a selected fragment's scene "
             "parent. Unticked, only the selected cards are changed."
         )
-        neighbour_box.toggled.connect(lambda _checked: self._replan())
-        self.neighbour_box = neighbour_box
-        inner.addWidget(neighbour_box)
+        self.neighbour_box.toggled.connect(self._on_scope_toggled)
+        self.root.addWidget(self.neighbour_box)
 
-        if self.preview.error:
-            inner.addWidget(QLabel(self.preview.error))
-            inner.addWidget(self._close_box())
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.root.addWidget(self.body)
+
+        self.status = QLabel("Planning…")
+        self.root.addWidget(self.status)
+
+        box = QDialogButtonBox()
+        self.apply_button = QPushButton("Apply")
+        self.apply_button.setDefault(True)
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self._on_apply)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.reject)
+        box.addButton(self.apply_button, QDialogButtonBox.ButtonRole.AcceptRole)
+        box.addButton(close_button, QDialogButtonBox.ButtonRole.RejectRole)
+        self.root.addWidget(box)
+
+        # Debounce a burst of toggles; the queue coalesces what still arrives.
+        self._replan_timer = QTimer(self)
+        self._replan_timer.setSingleShot(True)
+        self._replan_timer.setInterval(120)
+        self._replan_timer.timeout.connect(self._request_current_scope)
+
+        self._request_scope(bool(self.cfg.get("fix_neighbours", True)))
+
+    # --- planning -----------------------------------------------------
+
+    def _on_scope_toggled(self, checked: bool) -> None:
+        """React to the checkbox immediately; the plan itself runs off-thread."""
+        self.cfg = {**self.cfg, "fix_neighbours": bool(checked)}
+        self._set_busy(True)
+        self._replan_timer.start()
+
+    def _request_current_scope(self) -> None:
+        self._request_scope(bool(self.neighbour_box.isChecked()))
+
+    def _request_scope(self, state: bool) -> None:
+        request = self._queue.request(state)
+        if request.cached is not None:
+            self._adopt(request.cached, state)
+            self._set_busy(False)
             return
+        if not request.start:
+            self._set_busy(True)
+            return
+        self._start_worker(request)
 
-        plan = self.preview.plan
-        assert plan is not None
-        checked = sum(1 for w in plan.writes if w.default_checked)
-        summary = (
-            f"{self.preview.scope_label} · {len(plan.writes)} proposed writes · "
-            f"{checked} checked by default · {len(plan.reasons)} not fixable · "
-            f"{len(plan.warnings)} warning(s)"
+    def _start_worker(self, request: ReplanRequest[Preview]) -> None:
+        self._set_busy(True)
+        cfg = {**self.cfg, "fix_neighbours": request.state}
+        records = list(self.records_by_id.values()) if self.records_by_id else None
+        started = plan_preview_in_background(
+            self,
+            cfg,
+            self.scope_note_ids,
+            records,
+            lambda preview: self._worker_done(request, preview),
+            lambda exc: self._worker_failed(request, exc),
         )
-        header = QLabel(summary)
+        if started:
+            return
+        # Older host or no task manager: keep the add-on working synchronously.
+        try:
+            preview = plan_preview(self.col, cfg, self.scope_note_ids, records=records)
+        except Exception as exc:
+            self._worker_failed(request, exc)
+            return
+        self._worker_done(request, preview)
+
+    def _worker_done(self, request: ReplanRequest[Preview], preview: Preview) -> None:
+        if self._closed:
+            return
+        shown, following = self._queue.finish(request.token, request.state, preview)
+        if shown is not None:
+            self._adopt(shown, request.state)
+        if following is not None:
+            self._start_worker(following)
+        else:
+            self._set_busy(False)
+
+    def _worker_failed(self, request: ReplanRequest[Preview], exc: Exception) -> None:
+        if self._closed:
+            return
+        following = self._queue.fail(request.token, request.state)
+        if following is not None:
+            self._start_worker(following)
+            return
+        if self.preview is not None and not self.preview.error and not self._busy:
+            # A cached plan for the newest state is already on screen; this
+            # failed run was superseded, so keep showing it.
+            self._set_busy(False)
+            return
+        self._set_busy(False)
+        self.status.setText(f"Re-planning failed: {exc}")
+        self.apply_button.setEnabled(False)
+
+    def _adopt(self, preview: Preview, state: bool) -> None:
+        self.preview = preview
+        self.cfg = {**self.cfg, "fix_neighbours": state}
+        if preview.records_by_id:
+            self.records_by_id = preview.records_by_id
+        if preview.error:
+            self._show_error(preview.error)
+            return
+        if not self._body_built:
+            self._build_body(preview)
+        else:
+            self._update_body(preview)
+
+    def _show_error(self, message: str) -> None:
+        if self._error_label is None:
+            label = QLabel(message)
+            label.setWordWrap(True)
+            self.body_layout.addWidget(label)
+            self._error_label = label
+        else:
+            self._error_label.setText(message)
+        self.status.setText(message)
+        self.apply_button.setEnabled(False)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        if busy:
+            self.status.setText("Re-planning…")
+            self.apply_button.setEnabled(False)
+        else:
+            self._refresh_status()
+
+    # --- body ---------------------------------------------------------
+
+    def _build_body(self, preview: Preview) -> None:
+        plan = preview.plan
+        assert plan is not None
+        self.header_label = QLabel()
         font = QFont()
         font.setBold(True)
-        header.setFont(font)
-        inner.addWidget(header)
-        if self.preview.excluded:
-            excluded = QLabel(
-                f"{len(self.preview.excluded)} selected note(s) use a different note type "
-                "and were skipped."
-            )
-            inner.addWidget(excluded)
+        self.header_label.setFont(font)
+        self.body_layout.addWidget(self.header_label)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._changes_page(plan.writes), f"Proposed changes ({len(plan.writes)})")
-        tabs.addTab(
-            self._text_page(self._reason_lines()),
-            f"Not fixable ({len(plan.reasons)})",
-        )
-        tabs.addTab(
-            self._text_page(list(plan.warnings)),
-            f"Warnings ({len(plan.warnings)})",
-        )
-        inner.addWidget(tabs)
+        self.excluded_label = QLabel()
+        self.excluded_label.setWordWrap(True)
+        self.excluded_label.setVisible(False)
+        self.body_layout.addWidget(self.excluded_label)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._changes_page(), "Proposed changes")
+        self.reasons_view = self._text_view()
+        self.tabs.addTab(self.reasons_view, "Not fixable")
+        self.warnings_view = self._text_view()
+        self.tabs.addTab(self.warnings_view, "Warnings")
+        self.body_layout.addWidget(self.tabs)
 
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.detail.setMaximumHeight(150)
-        inner.addWidget(self.detail)
+        self.body_layout.addWidget(self.detail)
 
-        self.status = QLabel("")
-        inner.addWidget(self.status)
+        self._body_built = True
+        self._update_body(preview)
 
-        box = self._action_box()
-        inner.addWidget(box)
-        self._refresh_status()
-
-    # --- page builders ------------------------------------------------
-
-    def _changes_page(self, writes) -> QWidget:
+    def _changes_page(self) -> QWidget:
         page = QWidget()
         inner = QVBoxLayout(page)
 
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Filter by expression, field, or badge…")
         self.filter_input.setClearButtonEnabled(True)
-        self.filter_input.textChanged.connect(self._apply_filter)
         inner.addWidget(self.filter_input)
 
-        table = QTableWidget(0, len(_HEADERS))
-        table.setHorizontalHeaderLabels(_HEADERS)
-        vheader = table.verticalHeader()
-        if vheader is not None:
-            vheader.setVisible(False)
+        self.model = _ChangesModel()
+        self.proxy = _ChangesFilter()
+        self.proxy.setSourceModel(self.model)
+        self.filter_input.textChanged.connect(self.proxy.set_needle)
+        self.model.checkStateChanged.connect(self._refresh_status)
+
+        table = QTableView()
+        table.setModel(self.proxy)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSortingEnabled(False)
+        vertical = table.verticalHeader()
+        assert vertical is not None
+        vertical.setVisible(False)
         header = table.horizontalHeader()
-        if header is not None:
-            for column in range(len(_HEADERS)):
-                header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-
-        records = self.preview.records_by_id or {}
-        seen: set[int] = set()
-        table.setRowCount(len(writes))
-        for index, write in enumerate(writes):
-            key = (write.note_id, write.field)
-            self.checks[key] = bool(write.default_checked)
-
-            check_item = QTableWidgetItem()
-            check_item.setFlags(
-                Qt.ItemFlag.ItemIsUserCheckable
-                | Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-            )
-            check_item.setCheckState(
-                Qt.CheckState.Checked if write.default_checked else Qt.CheckState.Unchecked
-            )
-            check_item.setData(_KEY_ROLE, f"{key[0]}|{key[1]}")
-            check_item.setToolTip(guard_reason(write, self.cfg))
-            table.setItem(index, 0, check_item)
-
-            record = records.get(write.note_id)
-            expression = record.get("Expression") if record is not None else ""
-            label = f"{expression or '(no expression)'} · {write.note_id}"
-            table.setItem(index, 1, QTableWidgetItem(label if write.note_id not in seen else ""))
-            seen.add(write.note_id)
-            table.setItem(index, 2, QTableWidgetItem(write.field))
-            table.setItem(index, 3, QTableWidgetItem(_change_summary(write)))
-            source = f"note {write.source_note_id}" if write.source_note_id else ""
-            table.setItem(index, 4, QTableWidgetItem(source))
-
-            badge_text = ", ".join(write.badges)
-            badge_item = QTableWidgetItem(badge_text)
-            if write.badges:
-                tooltip = "\n".join(f"• {badge_explanation(b)}" for b in write.badges)
-                badge_item.setToolTip(tooltip)
-            table.setItem(index, 5, badge_item)
-
-        table.itemChanged.connect(self._on_item_changed)
-        table.itemSelectionChanged.connect(lambda: self._show_detail(table))
+        assert header is not None
+        for column in range(len(_HEADERS)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(0, 28)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        selection = table.selectionModel()
+        assert selection is not None
+        selection.selectionChanged.connect(self._on_selection_changed)
         self.table = table
         inner.addWidget(table)
         return page
 
-    def _text_page(self, lines: list[str]) -> QWidget:
-        page = QWidget()
-        inner = QVBoxLayout(page)
+    def _text_view(self) -> QPlainTextEdit:
         view = QPlainTextEdit()
         view.setReadOnly(True)
-        view.setPlainText("\n".join(lines) if lines else "Nothing to report.")
-        inner.addWidget(view)
-        return page
+        return view
 
-    def _reason_lines(self) -> list[str]:
-        plan = self.preview.plan
-        records = self.preview.records_by_id or {}
+    def _update_body(self, preview: Preview) -> None:
+        plan = preview.plan
+        assert plan is not None
+        if self._error_label is not None:
+            self._error_label.setVisible(False)
+        checked = sum(1 for w in plan.writes if w.default_checked)
+        self.header_label.setText(
+            f"{preview.scope_label} · {len(plan.writes)} proposed writes · "
+            f"{checked} checked by default · {len(plan.reasons)} not fixable · "
+            f"{len(plan.warnings)} warning(s)"
+        )
+        self.excluded_label.setVisible(bool(preview.excluded))
+        if preview.excluded:
+            self.excluded_label.setText(
+                f"{len(preview.excluded)} selected note(s) use a different note type "
+                "and were skipped."
+            )
+
+        self.tabs.setTabText(0, f"Proposed changes ({len(plan.writes)})")
+        self.reasons_view.setPlainText(
+            "\n".join(self._reason_lines(preview)) or "Nothing to report."
+        )
+        self.tabs.setTabText(1, f"Not fixable ({len(plan.reasons)})")
+        self.warnings_view.setPlainText("\n".join(plan.warnings) or "Nothing to report.")
+        self.tabs.setTabText(2, f"Warnings ({len(plan.warnings)})")
+
+        self.model.set_plan(plan.writes, preview.records_by_id or {}, self.cfg)
+        self.detail.setPlainText("")
+        self._refresh_status()
+
+    def _reason_lines(self, preview: Preview) -> list[str]:
+        plan = preview.plan
+        records = preview.records_by_id or {}
         assert plan is not None
         lines = []
         for note_id, reason in sorted(plan.reasons.items()):
@@ -269,54 +556,27 @@ class PreviewDialog(QDialog):
 
     # --- interaction --------------------------------------------------
 
-    def _on_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() != 0 or self.table.itemChanged is None:
+    def _on_selection_changed(self, *_args) -> None:
+        if not self._body_built:
             return
-        raw = item.data(_KEY_ROLE)
-        if not raw:
+        selection = self.table.selectionModel()
+        if selection is None:
             return
-        note_id, field = str(raw).split("|", 1)
-        is_checked = item.checkState() == Qt.CheckState.Checked
-        self.checks[(int(note_id), field)] = is_checked
-
-        plan = self.preview.plan
-        if plan is not None and 0 <= item.row() < len(plan.writes):
-            write = plan.writes[item.row()]
-            default_checked = bool(write.default_checked)
-            reason = guard_reason(write, self.cfg)
-            if is_checked:
-                new_tip = (
-                    "Checked by default"
-                    if default_checked
-                    else f"Checked manually (originally: {reason})"
-                )
-            else:
-                new_tip = reason if not default_checked else "Unchecked manually"
-            if item.toolTip() != new_tip:
-                self.table.blockSignals(True)
-                try:
-                    item.setToolTip(new_tip)
-                finally:
-                    self.table.blockSignals(False)
-
-        self._refresh_status()
-
-    def _show_detail(self, table: QTableWidget) -> None:
-        plan = self.preview.plan
-        if plan is None:
+        indexes = selection.selectedRows()
+        if not indexes:
             return
-        rows = {index.row() for index in table.selectedIndexes()}
-        if not rows:
+        source = self.proxy.mapToSource(indexes[0])
+        if not source.isValid():
             return
-        write = plan.writes[min(rows)]
+        write = self.model.write_at(source.row())
         lines = [
             f"note {write.note_id} · {write.field} · {OP_LABELS.get(write.op, write.op)}",
             f"badges: {', '.join(write.badges) or '(none)'}",
         ]
         if write.badges:
             lines.append("")
-            for b in write.badges:
-                lines.append(f"  • {b}: {badge_explanation(b)}")
+            for badge in write.badges:
+                lines.append(f"  • {badge}: {badge_explanation(badge)}")
         lines.extend(
             [
                 "",
@@ -329,31 +589,14 @@ class PreviewDialog(QDialog):
         )
         self.detail.setPlainText("\n".join(lines))
 
-    def _checked_keys(self) -> list[tuple[int, str]]:
-        return [key for key, on in self.checks.items() if on]
-
-    def _apply_filter(self, text: str) -> None:
-        """Show only table rows whose expression, field, or badges contain *text*."""
-        needle = text.strip().lower()
-        for row in range(self.table.rowCount()):
-            if not needle:
-                self.table.setRowHidden(row, False)
-                continue
-            visible = False
-            for col in (1, 2, 5):  # note/expression, field, badges
-                item = self.table.item(row, col)
-                if item is not None and needle in (item.text() or "").lower():
-                    visible = True
-                    break
-            if not visible:
-                # Also search the change summary column
-                item = self.table.item(row, 3)
-                if item is not None and needle in (item.text() or "").lower():
-                    visible = True
-            self.table.setRowHidden(row, not visible)
-
     def _refresh_status(self) -> None:
-        count = len(self._checked_keys())
+        count = len(self.model.checked_keys()) if self._body_built else 0
+        self.apply_button.setText(f"Apply {count} checked change(s)")
+        self.apply_button.setEnabled(not self._busy and count > 0)
+        if self._busy or not self._body_built or self.preview is None:
+            return
+        if self.preview.error:
+            return
         applied_tag = self.cfg.get("applied_tag")
         note = (
             f" · cards that finish with nothing left to do get the tag “{applied_tag}”"
@@ -361,35 +604,16 @@ class PreviewDialog(QDialog):
             else ""
         )
         self.status.setText(f"{count} row(s) selected{note}")
-        if hasattr(self, "apply_button"):
-            self.apply_button.setText(f"Apply {count} checked change(s)")
-            self.apply_button.setEnabled(count > 0)
-
-    def _action_box(self) -> QDialogButtonBox:
-        box = QDialogButtonBox()
-        self.apply_button = QPushButton("Apply")
-        self.apply_button.setDefault(True)
-        self.apply_button.clicked.connect(self._on_apply)
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.reject)
-        box.addButton(self.apply_button, QDialogButtonBox.ButtonRole.AcceptRole)
-        box.addButton(close_button, QDialogButtonBox.ButtonRole.RejectRole)
-        return box
-
-    def _close_box(self) -> QDialogButtonBox:
-        box = QDialogButtonBox()
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.reject)
-        box.addButton(close_button, QDialogButtonBox.ButtonRole.RejectRole)
-        return box
 
     # --- apply --------------------------------------------------------
 
     def _on_apply(self) -> None:
+        if self.preview is None:
+            return
         plan = self.preview.plan
         if plan is None:
             return
-        checked_keys = set(self._checked_keys())
+        checked_keys = set(self.model.checked_keys())
         declined_keys = frozenset({(w.note_id, w.field) for w in plan.writes} - checked_keys)
         decision = build_decision(self.col, plan, checked_keys, self.cfg)
         if not decision.row_count() and not decision.skipped:
@@ -413,6 +637,12 @@ class PreviewDialog(QDialog):
             self.preview.records_by_id,
         )
         self.accept()
+
+    def done(self, result: int) -> None:
+        """Stop accepting worker callbacks once the dialog is gone."""
+        self._closed = True
+        self._replan_timer.stop()
+        super().done(result)
 
 
 def _finish_apply(
