@@ -1161,6 +1161,13 @@ def _furigana_write_for(
             return None, None, None
 
     stale = bool(current.strip()) and not furigana_base_matches(current, sentence)
+    # If the ruby already describes the sentence and carries real readings,
+    # do not overwrite it — even when the engine would produce a different
+    # reading. This preserves show-specific overrides (issue #9) and avoids
+    # clobbering a valid ruby when only markup (bold) changed in the
+    # sentence. Plain-text (bracket-less) ruby is always regenerated.
+    if not stale and current.strip() and ("[" in current and "]" in current):
+        return None, None, None
     if generated == current and not stale:
         return None, None, None
     if not furigana_base_matches(generated, sentence):
@@ -2436,6 +2443,7 @@ def _append_local_sentence_writes(
     warnings: list[str],
     morph_tokenizer: Callable[[str], Sequence[MorphToken]] | None = None,
     batch_bold_inflected: bool = True,
+    skip_bold: bool = False,
 ) -> None:
     """Append in-place bold and subtitle-noise repairs when Sentence is free."""
     bold_write, bold_reason, bold_detail = _bold_repair_for(
@@ -2448,9 +2456,9 @@ def _append_local_sentence_writes(
         w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE and w.default_checked
         for w in target_writes
     )
-    if bold_write is not None and not queued_expansion:
+    if bold_write is not None and not queued_expansion and not skip_bold:
         target_writes.append(bold_write)
-    elif bold_reason is not None:
+    elif bold_reason is not None and not skip_bold:
         suffix = " (Sentence is also queued for scene expansion)" if queued_expansion else ""
         expr = target.get("Expression") or "(sentence card)"
         warnings.append(
@@ -2710,14 +2718,22 @@ def build_plan(
                     reasons[target.note_id] = repair_expr_reason
         # Markup-only bold repair and subtitle-noise repair when no checked
         # scene expansion already owns Sentence.
+        target_repair_rules = repair_rules
+        if (
+            inline_anns
+            and furigana_generator is not None
+            and "strip-inline-readings" not in target_repair_rules
+        ):
+            target_repair_rules = target_repair_rules + ("strip-inline-readings",)
         _append_local_sentence_writes(
             target,
             target_writes,
-            repair_rules,
+            target_repair_rules,
             reasons,
             warnings,
             morph_tokenizer=morph_tokenizer,
             batch_bold_inflected=bold_inflected,
+            skip_bold=bool(inline_anns),
         )
         # The ruby must describe the Sentence this card ends up with: drop a
         # checked ruby copied from another card's line *before* the ruby
