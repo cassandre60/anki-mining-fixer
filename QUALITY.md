@@ -266,6 +266,24 @@ first, with the reason.
   pure-CJK fragment failed to match an `ＯＫ`-bearing scene (author's
   引き受ける card, S03E10) and was wrongly reported `no-parent-that-fills`;
   the captured pair is in the real-card fixture.
+  **Anchor fallback (issue #10):** the tested word need not live in
+  `cloze-body`. A hand-corrected scene sibling completes a card that stores
+  no `cloze-*` (word-mined style: the word is bolded inside `Sentence` and
+  `cloze-prefix/body/suffix` are empty). `_expansion_anchor` requires a word
+  occurring **exactly once** in the parent's sentence — `cloze-body`, then
+  `Expression`, then placeable spellings (`_placeable_bold_candidates`, with
+  the morphological inflected / nominalized fallback) — never the parent's
+  own `<b>` span; the single bold on the expanded `Sentence` is retargeted
+  to the target's own word (badge `bold-retargeted-to-expression`), and the
+  corrected `Sentence (furigana)` ships only when its base matches the final
+  sentence (`furigana_base_matches`) or the ruby tier rebuilds it in the
+  same plan. A scene sibling's hand-corrected values are the scene's source
+  of truth for other same-scene cards; `Definition`, `Extended definition`
+  and `cloze-*` are still never copied; a target whose sentence is neither
+  the old fragment nor contained in the corrected sentence, or that was
+  itself hand-edited in a conflicting way, is skipped with a reason; one
+  Apply is the whole fix and a second Apply writes nothing (Q-A2).
+  Verified by `test_expansion_inherits_hand_corrected_sentence_when_cloze_body_empty`.
   Two pairing rules keep the card whole:
   - a completion that would strand a fragment ruby ships checked only when
     the parent carries a matching ruby **or** the furigana tier will rebuild
