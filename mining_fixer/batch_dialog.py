@@ -22,6 +22,7 @@ from aqt.qt import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    Qt,
     QTimer,
     QVBoxLayout,
     QWidget,
@@ -85,6 +86,7 @@ class BatchDialog(QDialog):
         ) = None
         self._changes_total = 0
         self._left_total = 0
+        self._replan_timer: QTimer | None = None
 
         self.setWindowTitle("Mining Fixer")
         self.resize(640, 320)
@@ -109,7 +111,7 @@ class BatchDialog(QDialog):
             "plus a selected fragment's scene parent, are fixed in the same run. "
             "Unticked, only the selected cards are changed."
         )
-        self.neighbour_box.toggled.connect(self._on_neighbours_toggled)
+        self.neighbour_box.toggled.connect(self._schedule_replan)
         layout.addWidget(self.neighbour_box)
 
         self.summary = QLabel("")
@@ -149,10 +151,31 @@ class BatchDialog(QDialog):
 
     # --- state --------------------------------------------------------
 
-    def _on_neighbours_toggled(self, checked: bool) -> None:
-        """Re-plan when the user changes the scope: the preview is the truth."""
-        self.cfg = {**self.cfg, "fix_neighbours": bool(checked)}
-        self.preview = plan_preview(self.col, self.cfg, self.scope_note_ids)
+    def _schedule_replan(self, _checked: bool = False) -> None:
+        """Debounce the neighbour-checkbox toggle (absorbs double-clicks)."""
+        if self._replan_timer is None:
+            self._replan_timer = QTimer(self)
+            self._replan_timer.setSingleShot(True)
+            self._replan_timer.setInterval(150)
+            self._replan_timer.timeout.connect(self._on_neighbours_toggled)
+        self._replan_timer.start()
+
+    def _on_neighbours_toggled(self) -> None:
+        """Re-plan when the user changes the scope: the preview is the truth.
+
+        Reuses the deck records captured at dialog open (avoids re-querying
+        ~17 k notes from SQLite on every toggle).
+        """
+        self.cfg = {**self.cfg, "fix_neighbours": bool(self.neighbour_box.isChecked())}
+        cached_records = self.preview.records_by_id
+        records_list = list(cached_records.values()) if cached_records else None
+        self.setCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.preview = plan_preview(
+                self.col, self.cfg, self.scope_note_ids, records=records_list
+            )
+        finally:
+            self.unsetCursor()
         if self.preview.error:
             self.summary.setText(self.preview.error)
             self.apply_button.setEnabled(False)

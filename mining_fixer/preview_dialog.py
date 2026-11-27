@@ -91,6 +91,7 @@ class PreviewDialog(QDialog):
         self.preview: Preview = plan_preview(col, self.cfg, self.scope_note_ids)
         self.pending: tuple | None = None
         self.checks: dict[tuple[int, str], bool] = {}
+        self._replan_timer: QTimer | None = None
 
         self.setWindowTitle("Mining Fixer — preview")
         self.resize(1180, 680)
@@ -105,16 +106,153 @@ class PreviewDialog(QDialog):
         self.root.addWidget(self.content)
         self._populate()
 
+    def _schedule_replan(self) -> None:
+        """Debounce the neighbour-checkbox toggle (absorbs double-clicks)."""
+        if self._replan_timer is None:
+            self._replan_timer = QTimer(self)
+            self._replan_timer.setSingleShot(True)
+            self._replan_timer.setInterval(150)
+            self._replan_timer.timeout.connect(self._replan)
+        self._replan_timer.start()
+
     def _replan(self) -> None:
-        """Re-plan for the new scope; the preview is always the truth (Q-C4)."""
+        """Re-plan for the new scope; the preview is always the truth (Q-C4).
+
+        Reuses the deck records captured at dialog open (avoids a full SQL
+        re-query of ~17 k notes) and preserves the user's manual check/uncheck
+        overrides by keying them on ``(note_id, field)``.
+        """
         self.cfg = {**self.cfg, "fix_neighbours": bool(self.neighbour_box.isChecked())}
-        self.preview = plan_preview(self.col, self.cfg, self.scope_note_ids)
-        self.checks = {}
-        old = self.content
-        if old is not None:
-            old.setParent(None)
-            old.deleteLater()
-        self._install_content()
+        cached_records = self.preview.records_by_id
+        records_list = list(cached_records.values()) if cached_records else None
+        self.setCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.preview = plan_preview(
+                self.col, self.cfg, self.scope_note_ids, records=records_list
+            )
+        finally:
+            self.unsetCursor()
+        self._update_content()
+
+    def _update_content(self) -> None:
+        """Refresh the dialog body after a re-plan without destroying widgets.
+
+        Updates the header, table rows, tabs, and detail pane in place —
+        preserving user check/uncheck overrides that still apply to the new
+        plan (keyed by ``(note_id, field)``).
+        """
+        plan = self.preview.plan
+        if plan is None or self.preview.error:
+            # Degenerate case: plan disappeared (should not happen on a scope
+            # toggle, but be safe). Fall back to a full rebuild.
+            old = self.content
+            if old is not None:
+                old.setParent(None)
+                old.deleteLater()
+            self.checks = {}
+            self._install_content()
+            return
+
+        # --- header ---
+        checked = sum(1 for w in plan.writes if w.default_checked)
+        summary = (
+            f"{self.preview.scope_label} · {len(plan.writes)} proposed writes · "
+            f"{checked} checked by default · {len(plan.reasons)} not fixable · "
+            f"{len(plan.warnings)} warning(s)"
+        )
+        if hasattr(self, "header_label"):
+            self.header_label.setText(summary)
+
+        # --- tabs: reasons & warnings ---
+        if hasattr(self, "tabs"):
+            self.tabs.setTabText(0, f"Proposed changes ({len(plan.writes)})")
+            # Update "not fixable" tab
+            reason_page = self.tabs.widget(1)
+            if reason_page is not None:
+                view = reason_page.findChild(QPlainTextEdit)
+                if view is not None:
+                    lines = self._reason_lines()
+                    view.setPlainText("\n".join(lines) if lines else "Nothing to report.")
+            self.tabs.setTabText(1, f"Not fixable ({len(plan.reasons)})")
+            # Update "warnings" tab
+            warnings_page = self.tabs.widget(2)
+            if warnings_page is not None:
+                view = warnings_page.findChild(QPlainTextEdit)
+                if view is not None:
+                    lines = list(plan.warnings)
+                    view.setPlainText("\n".join(lines) if lines else "Nothing to report.")
+            self.tabs.setTabText(2, f"Warnings ({len(plan.warnings)})")
+
+        # --- table: rebuild rows, preserving user overrides ---
+        if hasattr(self, "table"):
+            self._repopulate_table(plan.writes)
+
+        if hasattr(self, "detail"):
+            self.detail.setPlainText("")
+        self._refresh_status()
+
+    def _repopulate_table(self, writes: tuple | list) -> None:
+        """Replace table rows for a new plan, preserving user check overrides."""
+        table = self.table
+        old_checks = dict(self.checks)
+        new_checks: dict[tuple[int, str], bool] = {}
+
+        table.blockSignals(True)
+        try:
+            table.setRowCount(len(writes))
+            records = self.preview.records_by_id or {}
+            seen: set[int] = set()
+            for index, write in enumerate(writes):
+                key = (write.note_id, write.field)
+                is_checked = old_checks[key] if key in old_checks else bool(write.default_checked)
+                new_checks[key] = is_checked
+
+                check_item = QTableWidgetItem()
+                check_item.setFlags(
+                    Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                )
+                check_item.setCheckState(
+                    Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked
+                )
+                check_item.setData(_KEY_ROLE, f"{key[0]}|{key[1]}")
+                if is_checked and not write.default_checked:
+                    check_item.setToolTip(
+                        f"Checked manually (originally: {guard_reason(write, self.cfg)})"
+                    )
+                elif not is_checked and write.default_checked:
+                    check_item.setToolTip("Unchecked manually")
+                else:
+                    check_item.setToolTip(guard_reason(write, self.cfg))
+                table.setItem(index, 0, check_item)
+
+                record = records.get(write.note_id)
+                expression = record.get("Expression") if record is not None else ""
+                label = f"{expression or '(no expression)'} · {write.note_id}"
+                table.setItem(
+                    index, 1, QTableWidgetItem(label if write.note_id not in seen else "")
+                )
+                seen.add(write.note_id)
+                table.setItem(index, 2, QTableWidgetItem(write.field))
+                table.setItem(index, 3, QTableWidgetItem(_change_summary(write)))
+                source = f"note {write.source_note_id}" if write.source_note_id else ""
+                table.setItem(index, 4, QTableWidgetItem(source))
+
+                badge_text = ", ".join(write.badges)
+                badge_item = QTableWidgetItem(badge_text)
+                if write.badges:
+                    tip = "\n".join(f"• {badge_explanation(b)}" for b in write.badges)
+                    badge_item.setToolTip(tip)
+                table.setItem(index, 5, badge_item)
+        finally:
+            table.blockSignals(False)
+
+        self.checks = new_checks
+
+        # Re-apply the active filter if any.
+        if hasattr(self, "filter_input"):
+            self._apply_filter(self.filter_input.text())
 
     def _populate(self) -> None:
         inner = self.content_layout
@@ -125,7 +263,7 @@ class PreviewDialog(QDialog):
             "this scene's Sentence Audio), and a selected fragment's scene "
             "parent. Unticked, only the selected cards are changed."
         )
-        neighbour_box.toggled.connect(lambda _checked: self._replan())
+        neighbour_box.toggled.connect(lambda _checked: self._schedule_replan())
         self.neighbour_box = neighbour_box
         inner.addWidget(neighbour_box)
 
@@ -142,11 +280,11 @@ class PreviewDialog(QDialog):
             f"{checked} checked by default · {len(plan.reasons)} not fixable · "
             f"{len(plan.warnings)} warning(s)"
         )
-        header = QLabel(summary)
+        self.header_label = QLabel(summary)
         font = QFont()
         font.setBold(True)
-        header.setFont(font)
-        inner.addWidget(header)
+        self.header_label.setFont(font)
+        inner.addWidget(self.header_label)
         if self.preview.excluded:
             excluded = QLabel(
                 f"{len(self.preview.excluded)} selected note(s) use a different note type "
@@ -154,17 +292,17 @@ class PreviewDialog(QDialog):
             )
             inner.addWidget(excluded)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._changes_page(plan.writes), f"Proposed changes ({len(plan.writes)})")
-        tabs.addTab(
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._changes_page(plan.writes), f"Proposed changes ({len(plan.writes)})")
+        self.tabs.addTab(
             self._text_page(self._reason_lines()),
             f"Not fixable ({len(plan.reasons)})",
         )
-        tabs.addTab(
+        self.tabs.addTab(
             self._text_page(list(plan.warnings)),
             f"Warnings ({len(plan.warnings)})",
         )
-        inner.addWidget(tabs)
+        inner.addWidget(self.tabs)
 
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
