@@ -45,12 +45,14 @@ from .normalize import (
     REPAIR_RULES,
     RUBY_EXCLUDED_RULES,
     MorphToken,
+    detect_inline_readings,
     furigana_base,
     furigana_base_matches,
     is_empty_glossary_shell,
     kana_fold,
     norm_reading,
     norm_sentence_match,
+    override_furigana_reading,
     reading_from_furigana,
     repair_sentence,
     strip_renderable,
@@ -2598,6 +2600,8 @@ def build_plan(
             reasons[target.note_id] = "opted-out"
             continue
         target_writes: list[PlannedWrite] = []
+        # Inline subtitle readings (issue #9): show-specific reading in parens.
+        inline_cleaned, inline_anns = detect_inline_readings(target.get("Sentence") or "")
         scene_writes, reason = [], None
         # A shared-audio sibling whose full block still contains this card's
         # fragment is the "audio filled, sentence skipped" shape: the card
@@ -2772,6 +2776,44 @@ def build_plan(
         # engine was present but produced nothing, demote it (keeping the
         # unchecked expansion visible with `stale-fragment-furigana-risk`), and
         # still clean subtitle noise in the kept fragment ruby.
+        # Inline subtitle readings (issue #9): atomicity — the sentence strip
+        # only lands if the ruby override succeeds.
+        if inline_anns:
+            if furigana_generator is None:
+                reasons[target.note_id] = "inline-reading-no-ruby"
+            else:
+                fw = next((w for w in target_writes if w.field == FURIGANA_FIELD), None)
+                if fw is not None:
+                    new_ruby = override_furigana_reading(fw.new_value, inline_cleaned, inline_anns)
+                    if new_ruby is None:
+                        target_writes = [
+                            w
+                            for w in target_writes
+                            if not (
+                                w.field == "Sentence"
+                                and w.op == OP_REPAIR_SENTENCE
+                                and "strip-inline-readings" in w.badges
+                            )
+                            and w.field != FURIGANA_FIELD
+                        ]
+                        reasons[target.note_id] = "inline-reading-no-ruby"
+                    else:
+                        target_writes = [
+                            (replace(w, new_value=new_ruby) if w is fw else w)
+                            for w in target_writes
+                        ]
+                else:
+                    target_writes = [
+                        w
+                        for w in target_writes
+                        if not (
+                            w.field == "Sentence"
+                            and w.op == OP_REPAIR_SENTENCE
+                            and "strip-inline-readings" in w.badges
+                        )
+                    ]
+                    reasons[target.note_id] = "inline-reading-no-ruby"
+
         target_writes = _demote_completion_with_stale_ruby(target, target_writes)
         if (
             had_checked_expansion

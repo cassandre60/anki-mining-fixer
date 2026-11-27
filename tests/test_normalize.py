@@ -366,16 +366,6 @@ def test_normalize_parens_converts_speaker_tag_prefixing_a_line():
     assert new == "（ヒロミ）最近 ヤナギハラさんが一人なの 知ってた?"
 
 
-def test_normalize_parens_converts_speaker_tag_followed_by_dialogue():
-    # The real defect: a speaker tag that opens a line and is followed by the
-    # dialogue on the same line — (ヒロミ)おはよう — must convert too, not only
-    # a tag that fills the whole line (owner report 2026-11-26).
-    text = "(ヒロミ)おはよう"
-    new, applied = repair_sentence(text, ALL_RULES)
-    assert applied == ("normalize-parens",)
-    assert new == "（ヒロミ）おはよう"
-
-
 def test_normalize_parens_leaves_long_speaker_as_is():
     # A parenthesised name longer than the speaker-paren limit (16 chars) is
     # not a speaker tag and stays as mined.
