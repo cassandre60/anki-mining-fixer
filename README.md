@@ -312,7 +312,7 @@ After auditing: delete the audit deck and the cloned note type.
 ## Development
 
 ```
-python3 -m pytest         # 354 tests with Anki; 352 + 2 self-skipping without
+python3 -m pytest         # 355 tests with Anki; 353 + 2 self-skipping without
 ruff check . && ruff format --check .
 ```
 

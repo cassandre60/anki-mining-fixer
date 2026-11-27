@@ -279,3 +279,26 @@ def test_the_finish_tag_is_written_only_for_the_clean_note(controller):
     decision = written[0]
     assert [w.note_id for w in decision.tags_writes] == [1]
     assert "auto-filled" in decision.tags_writes[0].new_tags
+
+
+def test_replan_keeps_the_scope_fixed_and_prefers_the_in_memory_records(controller):
+    """Later passes re-plan the same scope: the target set never drifts (Q-C4)."""
+    ci = controller
+    calls: list[dict] = []
+
+    def plan_preview(col, cfg, scope_note_ids=None, records=None, *, expand_neighbours=True):
+        calls.append(
+            {
+                "scope": list(scope_note_ids or []),
+                "records": records,
+                "expand_neighbours": expand_neighbours,
+            }
+        )
+        return types.SimpleNamespace(plan=object(), error=None)
+
+    ci.plan_preview = plan_preview
+    records = {1: types.SimpleNamespace(note_id=1)}
+    ci._replan(None, {}, [1], records)
+    assert calls == [
+        {"scope": [1], "records": [records[1]], "expand_neighbours": False},
+    ]
