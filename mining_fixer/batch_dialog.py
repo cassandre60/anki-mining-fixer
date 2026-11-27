@@ -86,7 +86,11 @@ class BatchDialog(QDialog):
         ) = None
         self._changes_total = 0
         self._left_total = 0
-        self._replan_timer: QTimer | None = None
+        # Debounce for the neighbour checkbox: one re-plan per burst of toggles.
+        self._replan_timer = QTimer(self)
+        self._replan_timer.setSingleShot(True)
+        self._replan_timer.setInterval(150)
+        self._replan_timer.timeout.connect(self._on_neighbours_toggled)
 
         self.setWindowTitle("Mining Fixer")
         self.resize(640, 320)
@@ -153,11 +157,6 @@ class BatchDialog(QDialog):
 
     def _schedule_replan(self, _checked: bool = False) -> None:
         """Debounce the neighbour-checkbox toggle (absorbs double-clicks)."""
-        if self._replan_timer is None:
-            self._replan_timer = QTimer(self)
-            self._replan_timer.setSingleShot(True)
-            self._replan_timer.setInterval(150)
-            self._replan_timer.timeout.connect(self._on_neighbours_toggled)
         self._replan_timer.start()
 
     def _on_neighbours_toggled(self) -> None:

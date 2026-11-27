@@ -91,7 +91,11 @@ class PreviewDialog(QDialog):
         self.preview: Preview = plan_preview(col, self.cfg, self.scope_note_ids)
         self.pending: tuple | None = None
         self.checks: dict[tuple[int, str], bool] = {}
-        self._replan_timer: QTimer | None = None
+        # Debounce for the neighbour checkbox: one re-plan per burst of toggles.
+        self._replan_timer = QTimer(self)
+        self._replan_timer.setSingleShot(True)
+        self._replan_timer.setInterval(150)
+        self._replan_timer.timeout.connect(self._replan)
 
         self.setWindowTitle("Mining Fixer — preview")
         self.resize(1180, 680)
@@ -108,11 +112,6 @@ class PreviewDialog(QDialog):
 
     def _schedule_replan(self) -> None:
         """Debounce the neighbour-checkbox toggle (absorbs double-clicks)."""
-        if self._replan_timer is None:
-            self._replan_timer = QTimer(self)
-            self._replan_timer.setSingleShot(True)
-            self._replan_timer.setInterval(150)
-            self._replan_timer.timeout.connect(self._replan)
         self._replan_timer.start()
 
     def _replan(self) -> None:
