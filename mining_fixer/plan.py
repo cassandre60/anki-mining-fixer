@@ -2746,6 +2746,19 @@ def build_plan(
                 or furigana_base_matches(ruby_write.new_value, effective_sentence)
             ):
                 target_writes.append(ruby_write)
+        # Inline subtitle readings (issue #9): strip the annotation and queue
+        # the ruby override, as one operation. The strip runs here (before
+        # the furigana tier) so the ruby is generated from the cleaned text.
+        if inline_anns:
+            if furigana_generator is None:
+                reasons[target.note_id] = "inline-reading-no-ruby"
+            elif not any(w.field == "Sentence" and w.default_checked for w in target_writes):
+                ir_write, _ir_reason, _ir_detail = _sentence_repair_write(
+                    target, ("strip-inline-readings",)
+                )
+                if ir_write is not None:
+                    target_writes.append(ir_write)
+
         # Furigana regeneration (dimension 3). Runs after any queued
         # Sentence write — the ruby layer must match the text the plan
         # leaves behind (BULK_FIX.md ordering). Only when no other
