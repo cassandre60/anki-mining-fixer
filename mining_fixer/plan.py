@@ -56,6 +56,7 @@ from .normalize import (
     override_furigana_reading,
     reading_from_furigana,
     repair_sentence,
+    strip_furigana_annotation_space,
     strip_renderable,
     word_key,
 )
@@ -1099,6 +1100,8 @@ def _ruby_repair_write(
     if is_empty(value):
         return None, None, None
     new_value, applied = repair_sentence(value, _ruby_repair_rules(rules))
+    # Bug 1: drop padding whitespace inside ``[...]`` readings (``[ TV]``).
+    new_value = strip_furigana_annotation_space(new_value)
     if new_value == value:
         return None, None, None
     return (
@@ -1167,6 +1170,9 @@ def _furigana_write_for(
             "furigana-generation-failed",
             "the reading engine produced nothing for this sentence",
         )
+    # Bug 1: Japanese Support pads token boundaries with spaces; strip padding
+    # inside ``[...]`` readings (``[ TV]`` -> ``[TV]``). Base text unchanged.
+    generated = strip_furigana_annotation_space(generated)
     current = target.get(FURIGANA_FIELD) or ""
     # A ruby that no longer describes its sentence (the mining junk
     # この‐たび【…】, or a block copied earlier) is stale: regenerate it in

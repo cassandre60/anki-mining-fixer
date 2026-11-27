@@ -15,6 +15,7 @@ from mining_fixer.normalize import (
     override_furigana_reading,
     reading_from_furigana,
     repair_sentence,
+    strip_furigana_annotation_space,
     word_key,
 )
 
@@ -378,6 +379,31 @@ def test_normalize_parens_leaves_unbalanced_as_is():
     assert repair_sentence(text, ALL_RULES) == (text, ())
 
 
+def test_normalize_parens_converts_fullwidth_open_with_western_close():
+    # Mixed pair: full-width open + old-western close. The early-out must not
+    # require ASCII "(" — `_SPEAKER_TAG_RE` already accepts `[)）]`.
+    text = "（葉子)"
+    new, applied = repair_sentence(text, ALL_RULES)
+    assert applied == ("normalize-parens",)
+    assert new == "（葉子）"
+    # Idempotent: the converted value is the fixpoint.
+    assert repair_sentence(new, ALL_RULES) == (new, ())
+
+
+def test_normalize_parens_converts_speaker_after_square_source_tag():
+    # Real defect (bug 2, case b): a western speaker paren after a square
+    # source tag. ``[TV](好美)`` -> ``[TV]（好美）``; square tag kept.
+    text = "[TV](好美) 毎日 殺されるんじゃ"
+    new, applied = repair_sentence(text, ALL_RULES)
+    assert applied == ("normalize-parens",)
+    assert new == "[TV]（好美） 毎日 殺されるんじゃ"
+    assert repair_sentence(new, ALL_RULES) == (new, ())
+    # Mixed paren styles after a square source tag convert too.
+    assert repair_sentence("[TEL](受付) 患者", ALL_RULES)[0] == "[TEL]（受付） 患者"
+    assert repair_sentence("[TV]（好美) ずっと", ALL_RULES)[0] == "[TV]（好美） ずっと"
+    assert repair_sentence("[TV](好美） ずっと", ALL_RULES)[0] == "[TV]（好美） ずっと"
+
+
 def test_normalize_parens_with_rule_off():
     text = "(葉子)"
     assert repair_sentence(text, ()) == (text, ())
@@ -608,3 +634,19 @@ def test_detect_inline_readings_refuses_a_single_kanji_run():
     # that character's own reading: it stays exactly as mined.
     sentence = "浦(みうら)さんは元気?"
     assert detect_inline_readings(sentence) == (sentence, [])
+
+
+def test_strip_furigana_annotation_space_bug1():
+    # Japanese Support pads token boundaries; strip padding inside [ ] readings.
+    assert strip_furigana_annotation_space("[ TV]") == "[TV]"
+    assert strip_furigana_annotation_space("[ TEL]（ベル）") == "[TEL]（ベル）"  # noqa: E501
+    assert strip_furigana_annotation_space("漢字[ かんじ]") == "漢字[かんじ]"
+    assert (
+        strip_furigana_annotation_space(" 星野[ほしの] 好美[よしみ]")
+        == " 星野[ほしの] 好美[よしみ]"
+    )
+    assert strip_furigana_annotation_space("[TV] ずっと") == "[TV] ずっと"
+    assert strip_furigana_annotation_space("あの[") == "あの["  # unbalanced untouched
+    # idempotent
+    once = strip_furigana_annotation_space("[ TV] 漢[ かん]")
+    assert strip_furigana_annotation_space(once) == once == "[TV] 漢[かん]"

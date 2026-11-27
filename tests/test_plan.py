@@ -451,6 +451,24 @@ def test_furigana_generation_uses_the_sentence_that_will_be_written():
     assert write is not None and write.default_checked
 
 
+def test_furigana_regeneration_strips_annotation_padding():
+    # Bug 1: Japanese Support pads token boundaries with spaces; the written
+    # ruby must not keep ``[ TV]`` / ``[ かんじ]``. Base text is unchanged.
+    def gen(sentence: str) -> str:
+        return sentence.replace("[TV]", "[ TV]").replace("はじめまして", " はじめまして")
+
+    rec = NoteRecord(
+        note_id=CHILD.note_id,
+        notetype_id=CHILD.notetype_id,
+        fields={**CHILD.fields, "Sentence": "はじめまして [TV]", "Sentence (furigana)": ""},
+        tags=frozenset(),
+    )
+    write, _reason, _detail = _furigana_write_for(rec, gen, [], allow_override=True)
+    assert write is not None
+    assert "[ TV]" not in write.new_value and "[TV]" in write.new_value
+    assert " はじめまして" in write.new_value  # leading space OUTSIDE [] kept
+
+
 def test_bold_moves_onto_a_half_width_katakana_spelling():
     # A subtitle dump can carry half-width katakana (ｽﾍﾟｸﾄﾗﾑ) while the mined
     # word and its furigana are full-width (スペクトラム): the bold must still

@@ -118,7 +118,10 @@ first, with the reason.
   `Sentence (furigana)`; owner addition 2026-11-21).
    Added also: `normalize-parens` (speaker/stage tags — short parenthesised
    names, the repo's speaker-paren notion — are rewritten to the
-   Japanese-style full-width `（name）`; pairs that are not speaker tags
+   Japanese-style full-width `（name）`, including a mixed pair
+   full-width-open + old-western-close `（name)`, and a line-opening tag
+   after a square source tag `[TV](name)`/`[TEL](name)` → `[TV]（name）`
+   with the square tag kept verbatim; pairs that are not speaker tags
    (longer than 16 chars, nested or unbalanced) stay as mined; owner
    addition 2026-11-25, issue #16) and `strip-inline-readings` (a subtitle's
    show-specific kana reading after a kanji run leaves the sentence together
@@ -156,7 +159,12 @@ first, with the reason.
   `furigana-generation-failed` reason, never a write; and the generated
   ruby's base text must carry exactly the sentence's characters
   (`normalize.furigana_base_matches`), else `furigana-base-mismatch` and no
-  write. Unreachable engine (headless, add-on missing) is reported once per
+  write. Padding whitespace inside `[...]` reading annotations injected by
+  the reading engine (`[ TV]`, `[ うけつけ]`, `[ TEL]`; Japanese Support
+  pads token boundaries) is stripped on output
+  (`normalize.strip_furigana_annotation_space`, applied to both
+  `regenerate_furigana` output and the `Sentence (furigana)` repair pass);
+  base text, readings and `furigana_base_matches` are unaffected. Unreachable engine (headless, add-on missing) is reported once per
   run. The engine is the controller at `reading.mecab` inside the add-on
   package (its `__init__` imports the `reading` submodule; the package has no
   `mecab` attribute — looking only at the package silently disabled the whole

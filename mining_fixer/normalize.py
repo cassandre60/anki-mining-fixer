@@ -37,6 +37,7 @@ __all__ = [
     "reading_from_furigana",
     "repair_sentence",
     "furigana_base_matches",
+    "strip_furigana_annotation_space",
     "word_key",
     "strip_renderable",
     "kana_fold",
@@ -194,6 +195,21 @@ def norm_reading(text: str) -> str:
 _KANJI_RE = re.compile(r"[㐀-\u4dbf\u4e00-\u9fff\u3005\u3006]")
 _FURIGANA_BRACKET_RE = re.compile(r"\[([^\[\]]*)\]")
 _FURIGANA_ANNOTATION_RE = re.compile(r"\[[^\[\]]*\]")
+#: Whitespace padding inside a ruby reading annotation (``[ TV]``,
+#: ``[ うけつけ]``) that the reading engine (Japanese Support) injects; the
+#: deck convention has no padding inside ``[ ]``. Bug 1.
+_FURIGANA_ANNOTATION_PADDING_RE = re.compile(r"\[\s*([^\[\]]*?)\s*\]")
+
+
+def strip_furigana_annotation_space(furigana: str) -> str:
+    """Strip padding whitespace inside ``[...]`` reading annotations.
+
+    Generated-ruby cleanup only: base text and reading are unchanged, so
+    :func:`furigana_base_matches` is unaffected. ``[ TV]`` -> ``[TV]``,
+    ``漢字[ かんじ]`` -> ``漢字[かんじ]``. Unbalanced brackets are left as
+    is. Pure; idempotent.
+    """
+    return _FURIGANA_ANNOTATION_PADDING_RE.sub(lambda m: "[" + m.group(1) + "]", furigana or "")
 
 
 def reading_from_furigana(furigana: str) -> str | None:
@@ -382,6 +398,11 @@ def _strip_nbsp(text: str) -> str:
 #: the whole line or the line's opening prefix (``(ヒロミ)おはよう``).
 _SPEAKER_TAG_RE = re.compile(r"[ \t]*[（(][^()（）\n]{1,16}[)）]")
 
+#: A square source tag opening a line, before a speaker/stage paren pair —
+#: ``[TV](好美)``, ``[TEL](受付)`` (square tag kept verbatim; only the
+#: western paren pair is normalized). Case (b) of bug 2.
+_SOURCE_TAG_RE = re.compile(r"[ \t]*\[[^\[\]\n]*\]")
+
 
 def _speaker_tag_to_fullwidth(match: re.Match[str]) -> str:
     """Replacement for :data:`_SPEAKER_TAG_RE`: the pair -> full-width."""
@@ -399,7 +420,7 @@ def _normalize_parens(text: str) -> str:
     pair used for some other purpose inside the sentence, and unbalanced or
     nested pairs, stay as mined. Idempotent. Pure.
     """
-    if "(" not in text:
+    if "(" not in text and "（" not in text:
         return text
     parts = re.split(r"(<br\s*/?>|\n)", text, flags=re.IGNORECASE)
     out: list[str] = []
@@ -408,10 +429,19 @@ def _normalize_parens(text: str) -> str:
             out.append(part)
             continue
         match = _SPEAKER_TAG_RE.match(part)
-        if match is None:
-            out.append(part)
-        else:
+        if match is not None:
             out.append(_speaker_tag_to_fullwidth(match) + part[match.end() :])
+            continue
+        # A line-opening speaker tag after a square source tag, e.g.
+        # ``[TV](好美) 毎日`` -> ``[TV]（好美） 毎日``; square tag kept.
+        source = _SOURCE_TAG_RE.match(part)
+        if source is not None:
+            rest = part[source.end() :]
+            tag = _SPEAKER_TAG_RE.match(rest)
+            if tag is not None:
+                out.append(source.group(0) + _speaker_tag_to_fullwidth(tag) + rest[tag.end() :])
+                continue
+        out.append(part)
     return "".join(out)
 
 
