@@ -421,9 +421,10 @@ class PreviewDialog(QDialog):
 
     def _show_error(self, message: str) -> None:
         if self._error_label is None:
-            self._error_label = QLabel(message)
-            self._error_label.setWordWrap(True)
-            self.body_layout.addWidget(self._error_label)
+            label = QLabel(message)
+            label.setWordWrap(True)
+            self.body_layout.addWidget(label)
+            self._error_label = label
         else:
             self._error_label.setText(message)
         self.status.setText(message)
