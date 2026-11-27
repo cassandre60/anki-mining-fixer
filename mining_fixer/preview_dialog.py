@@ -91,6 +91,10 @@ class PreviewDialog(QDialog):
         self.preview: Preview = plan_preview(col, self.cfg, self.scope_note_ids)
         self.pending: tuple | None = None
         self.checks: dict[tuple[int, str], bool] = {}
+        #: Every manual tick/untick the user made, kept even while a row is out
+        #: of the current plan (e.g. scope unticked), so an off→on round trip
+        #: does not silently resurrect the plan's default.
+        self._overrides: dict[tuple[int, str], bool] = {}
         # Debounce for the neighbour checkbox: one re-plan per burst of toggles.
         self._replan_timer = QTimer(self)
         self._replan_timer.setSingleShot(True)
@@ -193,7 +197,6 @@ class PreviewDialog(QDialog):
     def _repopulate_table(self, writes: tuple | list) -> None:
         """Replace table rows for a new plan, preserving user check overrides."""
         table = self.table
-        old_checks = dict(self.checks)
         new_checks: dict[tuple[int, str], bool] = {}
 
         table.blockSignals(True)
@@ -203,7 +206,9 @@ class PreviewDialog(QDialog):
             seen: set[int] = set()
             for index, write in enumerate(writes):
                 key = (write.note_id, write.field)
-                is_checked = old_checks[key] if key in old_checks else bool(write.default_checked)
+                is_checked = (
+                    self._overrides[key] if key in self._overrides else bool(write.default_checked)
+                )
                 new_checks[key] = is_checked
 
                 check_item = QTableWidgetItem()
@@ -341,46 +346,10 @@ class PreviewDialog(QDialog):
                 header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
 
-        records = self.preview.records_by_id or {}
-        seen: set[int] = set()
-        table.setRowCount(len(writes))
-        for index, write in enumerate(writes):
-            key = (write.note_id, write.field)
-            self.checks[key] = bool(write.default_checked)
-
-            check_item = QTableWidgetItem()
-            check_item.setFlags(
-                Qt.ItemFlag.ItemIsUserCheckable
-                | Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-            )
-            check_item.setCheckState(
-                Qt.CheckState.Checked if write.default_checked else Qt.CheckState.Unchecked
-            )
-            check_item.setData(_KEY_ROLE, f"{key[0]}|{key[1]}")
-            check_item.setToolTip(guard_reason(write, self.cfg))
-            table.setItem(index, 0, check_item)
-
-            record = records.get(write.note_id)
-            expression = record.get("Expression") if record is not None else ""
-            label = f"{expression or '(no expression)'} · {write.note_id}"
-            table.setItem(index, 1, QTableWidgetItem(label if write.note_id not in seen else ""))
-            seen.add(write.note_id)
-            table.setItem(index, 2, QTableWidgetItem(write.field))
-            table.setItem(index, 3, QTableWidgetItem(_change_summary(write)))
-            source = f"note {write.source_note_id}" if write.source_note_id else ""
-            table.setItem(index, 4, QTableWidgetItem(source))
-
-            badge_text = ", ".join(write.badges)
-            badge_item = QTableWidgetItem(badge_text)
-            if write.badges:
-                tooltip = "\n".join(f"• {badge_explanation(b)}" for b in write.badges)
-                badge_item.setToolTip(tooltip)
-            table.setItem(index, 5, badge_item)
-
+        self.table = table
+        self._repopulate_table(writes)
         table.itemChanged.connect(self._on_item_changed)
         table.itemSelectionChanged.connect(lambda: self._show_detail(table))
-        self.table = table
         inner.addWidget(table)
         return page
 
@@ -414,7 +383,9 @@ class PreviewDialog(QDialog):
             return
         note_id, field = str(raw).split("|", 1)
         is_checked = item.checkState() == Qt.CheckState.Checked
-        self.checks[(int(note_id), field)] = is_checked
+        key = (int(note_id), field)
+        self.checks[key] = is_checked
+        self._overrides[key] = is_checked
 
         plan = self.preview.plan
         if plan is not None and 0 <= item.row() < len(plan.writes):
