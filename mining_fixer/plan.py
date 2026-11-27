@@ -2812,7 +2812,15 @@ def build_plan(
                         reasons[target.note_id] = "inline-reading-no-ruby"
                     else:
                         target_writes = [
-                            (replace(w, new_value=new_ruby) if w is fw else w)
+                            (
+                                replace(
+                                    w,
+                                    new_value=new_ruby,
+                                    badges=(*w.badges, "ruby-reading-overridden"),
+                                )
+                                if w is fw
+                                else w
+                            )
                             for w in target_writes
                         ]
                 else:

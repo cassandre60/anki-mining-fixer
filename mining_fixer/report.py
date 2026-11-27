@@ -117,6 +117,8 @@ _BADGE_EXPLANATIONS: dict[str, str] = {
     "join-speaker-lines": "Speaker-prefixed lines joined",
     "strip-dash": "Stray horizontal bars stripped from the Sentence field",
     "strip-nbsp": "Non-breaking spaces (&nbsp;) stripped",
+    "strip-inline-readings": "Inline reading annotations stripped from the Sentence",
+    "ruby-reading-overridden": "Generated ruby reading overridden by an inline annotation",
 }
 
 
