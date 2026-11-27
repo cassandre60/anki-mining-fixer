@@ -103,16 +103,22 @@ enriched siblings. Two halves:
   it) — CI installs it, or use a venv.
 - Repo layout: pure core + add-on shell in `mining_fixer/`, tests in
   `tests/` (a `conftest.py` puts the repo root on `sys.path`).
+- CI installs only `ruff`/`pytest`/`pyright` — **no Anki, no PyQt6** — so
+  `pyright` there sees Qt names as `Unknown`. Code must type-check without
+  stubs: a Qt attribute declared `QLabel | None` is not narrowed by
+  `self.x = QLabel(...); self.x.method()` (it stays optional); build the
+  widget in a local, use it, then store it. Reproduce locally with a bare
+  venv (`pyright --pythonpath <venv>/bin/python`).
 
 ## 4. Gates before you present work
 
 ```bash
 ruff check . && ruff format --check . && pyright   # must be clean
-python3 -m pytest                                  # 355 tests with Anki installed
+python3 -m pytest                                  # 370 tests with Anki installed
 ```
 
-Then push and watch CI — it is the gate, and it runs without Anki (353 passed,
-2 skipped):
+Then push and watch CI — it is the gate, and it runs without Anki (362 passed,
+3 skipped):
 
 ```bash
 gh run watch --exit-status
