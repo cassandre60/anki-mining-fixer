@@ -410,7 +410,7 @@ below, never as silent scope creep inside a coding session.
     choices. Both dialogs now re-plan with the records captured at open
     (`plan_preview(records=...)`), update the preview table in place, keep
     user check/uncheck overrides keyed by `(note_id, field)`, debounce rapid
-    toggles (150 ms) and show a wait cursor. `expand_scope_with_neighbours`
+    toggles (120 ms) and show a wait cursor. `expand_scope_with_neighbours`
     caches each note's parsed scene audio instead of re-parsing it per
     (selected, candidate) pair. Measured on a synthetic 17 k-note deck
     (pure planner, no Anki): 100-target re-plan 900 ms → 322 ms cold,
@@ -418,6 +418,20 @@ below, never as silent scope creep inside a coding session.
     355 ms → 171 ms cached; the remaining single-target ~140 ms is
     `build_plan`'s word index. Pinned by the existing neighbour-expansion
     tests and `tests/test_apply_fixpoint.py`'s in-memory re-plan test.
+  - **Off-thread toggle follow-up (2026-11-27).** The synchronous planner
+    still spent ~170–250 ms on the UI thread per toggle, so the checkbox could
+    visibly freeze. Planning now runs through Anki's background task manager
+    (`collection_io.plan_preview_in_background` → `aqt.operations.QueryOp`);
+    the click only updates the config, disables Apply and starts the 120 ms
+    debounce timer. The pure `replan.ReplanQueue` coalesces a burst to one
+    running plan plus the newest state, caches every finished state so toggling
+    back is immediate, and never displays a stale result. The preview table is
+    a `QAbstractTableModel` behind a `QSortFilterProxyModel`, so adopting a
+    plan is a model reset rather than widget construction, and manual ticks
+    live in the model keyed by `(note_id, field)`. A synchronous fallback keeps
+    older hosts working when the task manager is unavailable. Pinned by
+    `tests/test_replan.py`, `tests/test_background_plan.py` and
+    `tests/test_preview_model.py`.
 
 ## Backlog
 

@@ -527,12 +527,18 @@ first, with the reason.
   4. **Cached media existence lookups:** Media checks must query the media
      directory path once and cache file existence in memory, avoiding redundant
      Rust FFI and filesystem `stat` bursts.
-  5. **Interactive re-plan reuses the open dialog's snapshot:** Toggling the
-     neighbour checkbox must not re-query the deck (`plan_preview(records=...)`
-     with the records captured at open), must not tear down and rebuild the
-     dialog body (the table is repopulated in place), and must not discard the
-     user's manual row check/uncheck state (keyed by `(note_id, field)` and
-     re-applied to the new plan). A short debounce coalesces rapid toggles.
+  5. **Interactive re-plan is off the UI thread:** toggling the neighbour
+     checkbox must do no planning on the UI thread and must not re-query the
+     deck (`plan_preview(records=...)` with the snapshot captured at open).
+     Planning runs through Anki's background task manager
+     (`plan_preview_in_background` → `aqt.operations.QueryOp`); the pure
+     `replan.ReplanQueue` coalesces a burst of toggles to at most one running
+     plan plus the newest requested state, serves a state already planned
+     from cache, and never displays a stale result. The table is a
+     `QAbstractTableModel` reset in place (not rebuilt widgets), and the
+     user's manual row check/uncheck state is model data keyed by
+     `(note_id, field)`, so it survives every re-plan and off→on round trip.
+     A short debounce coalesces rapid toggles before they reach the queue.
 
 ## System
 

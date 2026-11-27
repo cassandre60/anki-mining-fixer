@@ -7,6 +7,9 @@ runs in one pass, in the enforced order (a sentence is cleaned before its
 furigana is regenerated — `plan.py` feeds the post-write sentence to the
 reading engine). The config keys remain the escape hatch for anyone who
 wants a dimension off; the window itself stays out of the way.
+
+Planning runs on Anki's background task manager and is coalesced/cached per
+scope state, so the neighbour checkbox never blocks the UI thread.
 """
 
 from __future__ import annotations
@@ -22,7 +25,6 @@ from aqt.qt import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
-    Qt,
     QTimer,
     QVBoxLayout,
     QWidget,
@@ -38,10 +40,12 @@ from .collection_io import (
     load_config,
     notify_collection_changed,
     plan_preview,
+    plan_preview_in_background,
     write_dry_run,
 )
 from .matching import NoteRecord
 from .plan import OP_ADD_TAGS
+from .replan import ReplanQueue, ReplanRequest
 from .report import GLANCE_LIMIT, OP_LABELS, change_lines, render_batch_summary
 
 #: The scope checkbox, worded so the user knows exactly what it widens.
@@ -70,10 +74,11 @@ class BatchDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.col = col
-        self.cfg = cfg if cfg is not None else load_config()
+        self.cfg = dict(cfg) if cfg is not None else load_config()
         self.browser = browser
         self.scope_note_ids = list(scope_note_ids) if scope_note_ids is not None else None
-        self.preview: Preview = plan_preview(col, self.cfg, self.scope_note_ids)
+        self.preview: Preview | None = None
+        self.records_by_id: dict[int, NoteRecord] = {}
         self.pending: (
             tuple[
                 ApplyDecision,
@@ -86,22 +91,15 @@ class BatchDialog(QDialog):
         ) = None
         self._changes_total = 0
         self._left_total = 0
-        # Debounce for the neighbour checkbox: one re-plan per burst of toggles.
-        self._replan_timer = QTimer(self)
-        self._replan_timer.setSingleShot(True)
-        self._replan_timer.setInterval(150)
-        self._replan_timer.timeout.connect(self._on_neighbours_toggled)
+        self._queue: ReplanQueue[Preview] = ReplanQueue()
+        self._closed = False
+        self._busy = False
 
         self.setWindowTitle("Mining Fixer")
         self.resize(640, 320)
         layout = QVBoxLayout(self)
 
-        if self.preview.error:
-            layout.addWidget(QLabel(self.preview.error))
-            layout.addWidget(self._close_box())
-            return
-
-        title = QLabel(self.preview.scope_label)
+        title = QLabel("Planning…")
         font = QFont()
         font.setBold(True)
         title.setFont(font)
@@ -115,14 +113,15 @@ class BatchDialog(QDialog):
             "plus a selected fragment's scene parent, are fixed in the same run. "
             "Unticked, only the selected cards are changed."
         )
-        self.neighbour_box.toggled.connect(self._schedule_replan)
+        self.neighbour_box.toggled.connect(self._on_scope_toggled)
         layout.addWidget(self.neighbour_box)
 
-        self.summary = QLabel("")
+        self.summary = QLabel("Planning…")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
 
         self.changes_button = QPushButton("")
+        self.changes_button.setVisible(False)
         self.changes_button.clicked.connect(self._toggle_changes)
         layout.addWidget(self.changes_button)
         self.changes_list = QListWidget()
@@ -131,6 +130,7 @@ class BatchDialog(QDialog):
         layout.addWidget(self.changes_list)
 
         self.left_button = QPushButton("")
+        self.left_button.setVisible(False)
         self.left_button.clicked.connect(self._toggle_left_alone)
         layout.addWidget(self.left_button)
         self.left_list = QListWidget()
@@ -142,8 +142,10 @@ class BatchDialog(QDialog):
         box = QDialogButtonBox()
         self.apply_button = QPushButton("Apply")
         self.apply_button.setDefault(True)
+        self.apply_button.setEnabled(False)
         self.apply_button.clicked.connect(self._on_apply)
         preview_button = QPushButton("View report")
+        preview_button.setEnabled(False)
         preview_button.clicked.connect(self._on_view_report)
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.reject)
@@ -151,45 +153,120 @@ class BatchDialog(QDialog):
         box.addButton(preview_button, QDialogButtonBox.ButtonRole.ActionRole)
         box.addButton(close_button, QDialogButtonBox.ButtonRole.RejectRole)
         layout.addWidget(box)
-        self._refresh()
+        self.preview_button = preview_button
 
-    # --- state --------------------------------------------------------
+        self._replan_timer = QTimer(self)
+        self._replan_timer.setSingleShot(True)
+        self._replan_timer.setInterval(120)
+        self._replan_timer.timeout.connect(self._request_current_scope)
 
-    def _schedule_replan(self, _checked: bool = False) -> None:
-        """Debounce the neighbour-checkbox toggle (absorbs double-clicks)."""
+        self._request_scope(bool(self.cfg.get("fix_neighbours", True)))
+
+    # --- planning -----------------------------------------------------
+
+    def _on_scope_toggled(self, checked: bool) -> None:
+        """React to the checkbox immediately; the plan itself runs off-thread."""
+        self.cfg = {**self.cfg, "fix_neighbours": bool(checked)}
+        self._set_busy(True)
         self._replan_timer.start()
 
-    def _on_neighbours_toggled(self) -> None:
-        """Re-plan when the user changes the scope: the preview is the truth.
+    def _request_current_scope(self) -> None:
+        self._request_scope(bool(self.neighbour_box.isChecked()))
 
-        Reuses the deck records captured at dialog open (avoids re-querying
-        ~17 k notes from SQLite on every toggle).
-        """
-        self.cfg = {**self.cfg, "fix_neighbours": bool(self.neighbour_box.isChecked())}
-        cached_records = self.preview.records_by_id
-        records_list = list(cached_records.values()) if cached_records else None
-        self.setCursor(Qt.CursorShape.WaitCursor)
+    def _request_scope(self, state: bool) -> None:
+        request = self._queue.request(state)
+        if request.cached is not None:
+            self._adopt(request.cached, state)
+            self._set_busy(False)
+            return
+        if not request.start:
+            self._set_busy(True)
+            return
+        self._start_worker(request)
+
+    def _start_worker(self, request: ReplanRequest[Preview]) -> None:
+        self._set_busy(True)
+        cfg = {**self.cfg, "fix_neighbours": request.state}
+        records = list(self.records_by_id.values()) if self.records_by_id else None
+        started = plan_preview_in_background(
+            self,
+            cfg,
+            self.scope_note_ids,
+            records,
+            lambda preview: self._worker_done(request, preview),
+            lambda exc: self._worker_failed(request, exc),
+        )
+        if started:
+            return
         try:
-            self.preview = plan_preview(
-                self.col, self.cfg, self.scope_note_ids, records=records_list
-            )
-        finally:
-            self.unsetCursor()
-        if self.preview.error:
-            self.summary.setText(self.preview.error)
+            preview = plan_preview(self.col, cfg, self.scope_note_ids, records=records)
+        except Exception as exc:
+            self._worker_failed(request, exc)
+            return
+        self._worker_done(request, preview)
+
+    def _worker_done(self, request: ReplanRequest[Preview], preview: Preview) -> None:
+        if self._closed:
+            return
+        shown, following = self._queue.finish(request.token, request.state, preview)
+        if shown is not None:
+            self._adopt(shown, request.state)
+        if following is not None:
+            self._start_worker(following)
+        else:
+            self._set_busy(False)
+
+    def _worker_failed(self, request: ReplanRequest[Preview], exc: Exception) -> None:
+        if self._closed:
+            return
+        following = self._queue.fail(request.token, request.state)
+        if following is not None:
+            self._start_worker(following)
+            return
+        if self.preview is not None and not self.preview.error and not self._busy:
+            # A cached plan for the newest state is already on screen; this
+            # failed run was superseded, so keep showing it.
+            self._set_busy(False)
+            return
+        self._set_busy(False)
+        self.summary.setText(f"Re-planning failed: {exc}")
+        self.apply_button.setEnabled(False)
+
+    def _adopt(self, preview: Preview, state: bool) -> None:
+        self.preview = preview
+        self.cfg = {**self.cfg, "fix_neighbours": state}
+        if preview.records_by_id:
+            self.records_by_id = preview.records_by_id
+        if preview.error:
+            self.title.setText("Mining Fixer")
+            self.summary.setText(preview.error)
             self.apply_button.setEnabled(False)
+            self.preview_button.setEnabled(False)
             self.changes_button.setVisible(False)
             self.left_button.setVisible(False)
             return
-        self.title.setText(self.preview.scope_label)
+        self.title.setText(preview.scope_label)
+        self.preview_button.setEnabled(True)
         self._refresh()
 
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        if busy:
+            self.summary.setText("Re-planning…")
+            self.apply_button.setEnabled(False)
+        else:
+            self._refresh()
+
+    # --- state --------------------------------------------------------
+
     def _selection(self) -> BatchSelection:
+        assert self.preview is not None
         plan = self.preview.plan
         assert plan is not None
         return select(plan, default_ops(self.cfg))
 
     def _meta(self, selection: BatchSelection) -> dict:
+        assert self.preview is not None
         plan = self.preview.plan
         assert plan is not None
         return {
@@ -204,6 +281,8 @@ class BatchDialog(QDialog):
         }
 
     def _refresh(self) -> None:
+        if self.preview is None or self.preview.error:
+            return
         selection = self._selection()
         parts = []
         if selection.field_notes:
@@ -250,7 +329,7 @@ class BatchDialog(QDialog):
 
         target_count = selection.field_notes or selection.notes
         self.apply_button.setText(f"Fix {target_count} note(s)")
-        self.apply_button.setEnabled(bool(selection.rows))
+        self.apply_button.setEnabled(not self._busy and bool(selection.rows))
 
     def _toggle_changes(self) -> None:
         self._toggle(self.changes_button, self.changes_list, self._changes_total, "planned changes")
@@ -267,6 +346,8 @@ class BatchDialog(QDialog):
     # --- actions ------------------------------------------------------
 
     def _on_apply(self) -> None:
+        if self.preview is None:
+            return
         plan = self.preview.plan
         if plan is None:
             return
@@ -293,6 +374,8 @@ class BatchDialog(QDialog):
         Nothing here writes to the collection; the file copy is an explicit
         save inside the viewer.
         """
+        if self.preview is None:
+            return
         plan = self.preview.plan
         if plan is None:
             return
@@ -320,18 +403,19 @@ class BatchDialog(QDialog):
         viewer.exec()
 
     def _save_report(self, selection, meta: dict) -> None:
+        if self.preview is None:
+            return
         plan = self.preview.plan
         if plan is None:
             return
         path = write_dry_run(plan, self.preview.records_by_id or {}, selection, meta)
         showInfo(f"Report saved (nothing was changed):\n{path}", parent=self)
 
-    def _close_box(self) -> QDialogButtonBox:
-        box = QDialogButtonBox()
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.reject)
-        box.addButton(close_button, QDialogButtonBox.ButtonRole.RejectRole)
-        return box
+    def done(self, result: int) -> None:
+        """Stop accepting worker callbacks once the dialog is gone."""
+        self._closed = True
+        self._replan_timer.stop()
+        super().done(result)
 
 
 def _finish_batch(col, pending, browser=None, parent=None) -> None:

@@ -58,6 +58,7 @@ __all__ = [
     "media_exists",
     "notify_collection_changed",
     "plan_preview",
+    "plan_preview_in_background",
     "read_state",
     "restore_from_log",
     "write_run_log",
@@ -460,6 +461,42 @@ def plan_preview(
         missing=tuple(missing),
         neighbours=tuple(neighbours),
     )
+
+
+def plan_preview_in_background(
+    parent,
+    cfg: dict,
+    scope_note_ids,
+    records: Sequence[NoteRecord] | None,
+    on_success: Callable[[Preview], None],
+    on_failure: Callable[[Exception], None],
+) -> bool:
+    """Run :func:`plan_preview` off the UI thread; ``False`` when unavailable.
+
+    ``QueryOp`` serialises collection reads with other collection work, so the
+    worker may read models/media/notes safely while the dialog stays
+    responsive. The record snapshot is copied before the worker starts; the
+    caller keeps ownership of the original.
+
+    Returns ``False`` (without raising) when Anki's task manager is not
+    available, so the caller can fall back to a synchronous plan — the add-on
+    keeps working, just without the responsive path.
+    """
+    try:
+        from aqt.operations import QueryOp
+
+        if mw is None or getattr(mw, "col", None) is None:
+            return False
+        snapshot = list(records) if records is not None else None
+        QueryOp(
+            parent=parent,
+            op=lambda col: plan_preview(col, cfg, scope_note_ids, records=snapshot),
+            success=on_success,
+        ).failure(on_failure).run_in_background()
+        return True
+    except Exception as exc:
+        print(f"Mining Fixer: background planning unavailable: {exc}")
+        return False
 
 
 def read_state(col, note_id: int) -> NoteState:
