@@ -102,6 +102,8 @@ REPORT_REASONS = frozenset(
         "expression-repair-no-kanji-form",
         "expression-repair-not-a-kanji-completion",
         "expression-not-word-like",
+        "inline-reading-no-ruby",
+        "repair-anchor-risk",
     }
 )
 
@@ -120,6 +122,9 @@ _REASON_TEXT = {
     "expression-repair-not-a-kanji-completion": "not a kanji completion — left alone",
     "expression-not-word-like": "furigana base is not word-like — left alone",
     "repair-anchor-risk": "cleaning would move the tested word — left alone",
+    "inline-reading-no-ruby": (
+        "inline reading kept — the show-specific reading could not be moved to the ruby"
+    ),
     "furigana-generation-failed": "the reading engine produced nothing — left alone",
     "furigana-base-mismatch": "generated reading does not match the sentence — left alone",
 }

@@ -16,7 +16,8 @@
     "join-speaker-lines",
     "strip-dash",
     "strip-nbsp",
-    "normalize-parens"
+    "normalize-parens",
+    "strip-inline-readings"
   ],
   "batch_regenerate_furigana": true,
   "batch_repair_expression": true,
@@ -59,5 +60,7 @@
   "notes_autocheck": false,
   "replaces_autocheck": true,
   "optout_tag": "no-autofill",
-  "applied_tag": "auto-filled"
+  "applied_tag": "auto-filled",
+  "batch_strip_inline_readings": true,
+  "fix_neighbours": true
 }

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 
 from aqt.qt import (
     QAbstractItemView,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFont,
@@ -51,6 +52,9 @@ _HEADERS = ["", "note", "field", "change", "source", "badges"]
 _CHECK_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 _KEY_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 
+#: The scope checkbox (B12), worded so the user knows exactly what it widens.
+NEIGHBOUR_LABEL = "Also fix the other cards mined from the same subtitle line"
+
 
 def _clip(text: str, limit: int = 120) -> str:
     flat = " ".join((text or "").split())
@@ -83,17 +87,51 @@ class PreviewDialog(QDialog):
         self.col = col
         self.cfg = cfg if cfg is not None else load_config()
         self.browser = browser
-        self.preview: Preview = plan_preview(col, self.cfg, scope_note_ids)
+        self.scope_note_ids = list(scope_note_ids) if scope_note_ids is not None else None
+        self.preview: Preview = plan_preview(col, self.cfg, self.scope_note_ids)
         self.pending: tuple | None = None
         self.checks: dict[tuple[int, str], bool] = {}
 
         self.setWindowTitle("Mining Fixer — preview")
         self.resize(1180, 680)
-        layout = QVBoxLayout(self)
+        self.root = QVBoxLayout(self)
+        self.content: QWidget | None = None
+        self._install_content()
+
+    def _install_content(self) -> None:
+        """Build the dialog body for the current plan (re-run on a scope change)."""
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.root.addWidget(self.content)
+        self._populate()
+
+    def _replan(self) -> None:
+        """Re-plan for the new scope; the preview is always the truth (Q-C4)."""
+        self.cfg = {**self.cfg, "fix_neighbours": bool(self.neighbour_box.isChecked())}
+        self.preview = plan_preview(self.col, self.cfg, self.scope_note_ids)
+        self.checks = {}
+        old = self.content
+        if old is not None:
+            old.setParent(None)
+            old.deleteLater()
+        self._install_content()
+
+    def _populate(self) -> None:
+        inner = self.content_layout
+        neighbour_box = QCheckBox(NEIGHBOUR_LABEL)
+        neighbour_box.setChecked(bool(self.cfg.get("fix_neighbours", True)))
+        neighbour_box.setToolTip(
+            "Also fixes the cards mined from the same subtitle line (they share "
+            "this scene's Sentence Audio), and a selected fragment's scene "
+            "parent. Unticked, only the selected cards are changed."
+        )
+        neighbour_box.toggled.connect(lambda _checked: self._replan())
+        self.neighbour_box = neighbour_box
+        inner.addWidget(neighbour_box)
 
         if self.preview.error:
-            layout.addWidget(QLabel(self.preview.error))
-            layout.addWidget(self._close_box())
+            inner.addWidget(QLabel(self.preview.error))
+            inner.addWidget(self._close_box())
             return
 
         plan = self.preview.plan
@@ -108,13 +146,13 @@ class PreviewDialog(QDialog):
         font = QFont()
         font.setBold(True)
         header.setFont(font)
-        layout.addWidget(header)
+        inner.addWidget(header)
         if self.preview.excluded:
             excluded = QLabel(
                 f"{len(self.preview.excluded)} selected note(s) use a different note type "
                 "and were skipped."
             )
-            layout.addWidget(excluded)
+            inner.addWidget(excluded)
 
         tabs = QTabWidget()
         tabs.addTab(self._changes_page(plan.writes), f"Proposed changes ({len(plan.writes)})")
@@ -126,18 +164,18 @@ class PreviewDialog(QDialog):
             self._text_page(list(plan.warnings)),
             f"Warnings ({len(plan.warnings)})",
         )
-        layout.addWidget(tabs)
+        inner.addWidget(tabs)
 
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.detail.setMaximumHeight(150)
-        layout.addWidget(self.detail)
+        inner.addWidget(self.detail)
 
         self.status = QLabel("")
-        layout.addWidget(self.status)
+        inner.addWidget(self.status)
 
         box = self._action_box()
-        layout.addWidget(box)
+        inner.addWidget(box)
         self._refresh_status()
 
     # --- page builders ------------------------------------------------
@@ -317,7 +355,11 @@ class PreviewDialog(QDialog):
     def _refresh_status(self) -> None:
         count = len(self._checked_keys())
         applied_tag = self.cfg.get("applied_tag")
-        note = f" · notes written get the tag “{applied_tag}”" if applied_tag else ""
+        note = (
+            f" · cards that finish with nothing left to do get the tag “{applied_tag}”"
+            if applied_tag
+            else ""
+        )
         self.status.setText(f"{count} row(s) selected{note}")
         if hasattr(self, "apply_button"):
             self.apply_button.setText(f"Apply {count} checked change(s)")
@@ -409,6 +451,8 @@ def _finish_apply(
         log_path = result.log_path
         problems = result.problems
     else:
+        # Legacy path (no cfg/scope): the decision is written as re-asserted.
+        # The clean-only ``applied_tag`` belongs to the fixpoint controller.
         log_path = write_run_log(decision, meta) if decision.row_count() else None
         modified = apply_decision(col, decision)
         writes = decision.row_count()

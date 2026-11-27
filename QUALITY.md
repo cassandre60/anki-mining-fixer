@@ -27,7 +27,8 @@ first, with the reason.
   characters, Q-D11), `repair_expression` (the new spelling is the note's own
   furigana base, cross-checked against its reading field, Q-D12; the old
   spelling survives in the run log, Q-D7), `strip_empty_glossary` (only a
-  definition that renders as nothing, Q-D13), `add_tags` (superset only).
+  definition that renders as nothing, Q-D13), `add_tags` (superset only —
+  this is also the op that writes the clean-run `applied_tag`, Q-C11).
   `OPS_TOUCHING_NONEMPTY` is the single source of
   truth and a test asserts no other op writes a non-empty value.
 - **Q-D3 — Bold is markup-only, word-like and unique.** A bold write is
@@ -119,7 +120,11 @@ first, with the reason.
    names, the repo's speaker-paren notion — are rewritten to the
    Japanese-style full-width `（name）`; pairs that are not speaker tags
    (longer than 16 chars, nested or unbalanced) stay as mined; owner
-   addition 2026-11-25, issue #16).
+   addition 2026-11-25, issue #16) and `strip-inline-readings` (a subtitle's
+   show-specific kana reading after a kanji run leaves the sentence together
+   with its ruby override — Q-C10; the rule is skipped entirely when no ruby
+   can carry the reading, and `batch_strip_inline_readings` is the escape
+   hatch).
   `<br>` line breaks and spacing are otherwise deliberately NOT rewritten —
   they are the sentence's pause structure (owner decision 2026-11-15;
   `flatten-div-blocks` only converts block *tags*, never an existing `<br>`;
@@ -132,7 +137,7 @@ first, with the reason.
   decision (2026-11-16) the dimension runs by default: the tool fixes on
   its own (`batch_repair_sentence: true`, rules `flatten-div-blocks`,
   `strip-arrows`, `join-speaker-lines`, `strip-dash`, `strip-nbsp`,
-   `normalize-parens`); the
+   `normalize-parens`, `strip-inline-readings`); the
   config key remains the escape hatch to switch it off, and every guard
   above still applies.
 - **Q-D11 — Furigana regeneration uses Japanese Support as the only
@@ -167,6 +172,12 @@ first, with the reason.
   The user intentionally omits speaker tags from the front so as not to
   reveal the answer, while keeping them on the back for character voice;
   blind regeneration must never clobber that hand-crafted context.
+  **The one exception is an inline-reading override (Q-C10):** when the
+  sentence carried a show-specific reading, the ruby *must* be rebuilt
+  (`allow_override`) — a ruby that already describes the sentence is
+  otherwise left alone, which is what kept `本町[ほんちょう]` in place while
+  `(ほんちゅう)` left the sentence (issue #20, root cause 4). A regenerated
+  value equal to the current field is never written.
   By owner decision (2026-11-16) it
   runs by default (`batch_regenerate_furigana: true`); the config key remains
   the escape hatch, and every guard above still applies.
@@ -294,7 +305,8 @@ first, with the reason.
 - **Q-C5 — Opt-out is respected.** A note tagged `optout_tag` is never a
   target; it may still be a *source*, and is badged when used.
 - **Q-C6 — The Browser selection is the target set, never the source set.**
-  Only selected notes are written; every note of the configured deck remains
+  Only selected notes (and, with `fix_neighbours` on, their same-subtitle-line
+  neighbours — Q-C12) are written; every note of the configured deck remains
   eligible as a parent/word source. Duplicates are dropped, the user's order
   is preserved, foreign note types and ids that no longer resolve are
   reported rather than silently dropped.
@@ -340,6 +352,61 @@ first, with the reason.
     make the note count as excluded by policy. The Expression repair
     likewise runs by default (owner decision 2026-11-16;
     `batch_repair_expression` is the escape hatch, Q-D12).
+- **Q-C10 — An inline reading is stripped only when the ruby can carry it;
+  the sentence/ruby pair is one operation (issue #9).** A subtitle's
+  show-specific reading — `本町(ほんちゅう)` — is a reading aid, not spoken
+  text: it leaves the `Sentence`, and the annotation's kana replace the
+  engine's reading of exactly that span in `Sentence (furigana)`
+  (`本町[ほんちゅう]`, never `本町[ほんちょう]`).
+  - **Detection is conservative** (`normalize.detect_inline_readings`): a
+    maximal kanji run, optionally followed by the deck's own `<b>` markup,
+    then at most one whitespace, then a parenthesised **kana-only** payload
+    of at least two kana and at most three per kanji. A one-kanji run is
+    refused (in this deck it is almost always a truncated name fragment:
+    `浦(みうら)` from 三浦), as are `(笑)`-style kanji asides, Latin, and
+    anything not adjacent. Both `()` and `（）` are accepted. Idempotent.
+  - **The span merge is alignment-exact**: the base may be split by the
+    engine's own spacing (`炭[たん] 治郎[じろう]`) and is merged; a base that
+    would cut *inside* one engine reading
+    (`本町通り[ほんちょうどおり]`) is refused rather than guessed. Every other
+    span stays byte-identical, and the result must still pass
+    `furigana_base_matches`.
+  - **All-or-nothing**: with no reading engine, the furigana tier off, no
+    ruby write, or a refused override, the sentence is **not** stripped —
+    the annotation is the only record of the show-specific reading. The note
+    is reported as `inline-reading-no-ruby`; unrelated repairs (bold,
+    arrows, fills) still apply.
+  - **One Sentence write**: when bold or a scene expansion owns the field,
+    the strip rides in that write (badges `strip-inline-readings` /
+    `expanded-strip-inline-readings`), never as a second competing row.
+  - A parenthetical is not part of the scene's identity: the matching key of
+    a card carrying one is computed on the annotation-free text, or the
+    scene would stop matching its own siblings (issue #20).
+- **Q-C11 — The `applied_tag` means "the add-on is finished with this card".**
+  It is written at the very end of one Apply, only for notes that the run
+  *touched* and that ended with nothing left to do: no residual row, no
+  guarded (unchecked) row, no reported reason, and no row the user declined.
+  A half-fixed card is never tagged, so the tag can be trusted as a filter
+  ("hide cards already fixed"). It is a hint, never a reason to skip
+  planning: correctness stays value-based (Q-A2), and the whole deck is
+  never re-scanned (Q-P1). `no-autofill` remains the permanent lock (Q-C5).
+- **Q-C12 — Scope may grow to the same subtitle line, and only that (B12).**
+  With `fix_neighbours` on (the default) the target set is the selection plus
+  its **same-line neighbours** inside `±window_days` (capped by
+  `MAX_WINDOW_MS`, Q-C2):
+  - cards sharing a non-word `Sentence Audio` file with a selected card;
+  - unenriched fragments whose normalized `Sentence` is contained in a
+    selected audio-bearing card's block (or an *identical* sentence when
+    both are unenriched);
+  - the audio-bearing scene parent of a selected fragment, and that parent's
+    own same-line siblings.
+  Same-word and same-episode-only neighbours are deliberately **not**
+  included. `optout_tag` neighbours are never added (Q-C5). Propagated notes
+  are named in the scope label ("N neighbour(s) added from the same subtitle
+  line") and every one of their rows carries the `scene-neighbour` badge, so
+  nothing arrives unexplained (Q-C4). Later passes of one Apply re-plan the
+  *same* scope with the expansion off: the target set never drifts after the
+  preview was shown.
 
 ## Apply behaviour
 

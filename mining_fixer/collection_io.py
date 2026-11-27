@@ -15,7 +15,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,7 +38,14 @@ from .applier import (
 from .batch import default_ops, select
 from .matching import NoteRecord
 from .normalize import MorphToken
-from .plan import Plan, build_plan, scope_from_selection
+from .plan import (
+    OP_ADD_TAGS,
+    Plan,
+    PlannedWrite,
+    build_plan,
+    expand_scope_with_neighbours,
+    scope_from_selection,
+)
 
 __all__ = [
     "Preview",
@@ -90,6 +97,10 @@ class Preview:
     scope_label: str = ""
     excluded: tuple[int, ...] = ()
     missing: tuple[int, ...] = ()
+    #: Notes the run fixes only because they share the selected card's
+    #: subtitle line (B12 scope propagation). Their rows carry the
+    #: ``scene-neighbour`` badge.
+    neighbours: tuple[int, ...] = ()
     error: str | None = None
 
 
@@ -337,7 +348,12 @@ def japanese_support_morph_tokenizer(col) -> Callable[[str], Sequence[MorphToken
 
 
 def plan_preview(
-    col, cfg: dict, scope_note_ids=None, records: list[NoteRecord] | None = None
+    col,
+    cfg: dict,
+    scope_note_ids=None,
+    records: list[NoteRecord] | None = None,
+    *,
+    expand_neighbours: bool = True,
 ) -> Preview:
     """Build the plan for a Browser selection, or for the newest notes.
 
@@ -347,6 +363,16 @@ def plan_preview(
     sibling. Selected notes from another note type are reported, not silently
     dropped, and selected notes outside the configured deck are loaded as
     targets too.
+
+    Unless ``expand_neighbours`` is false or ``fix_neighbours`` is off, the
+    target set grows to the selected cards' **same-subtitle-line neighbours**
+    (``plan.expand_scope_with_neighbours``): cards sharing the scene's
+    ``Sentence Audio`` file, unenriched fragments contained in a selected
+    scene block, and the audio-bearing parents of a selected fragment. A
+    neighbour is badged ``scene-neighbour`` and named in the scope label, so
+    the preview still shows every write before it happens (QUALITY Q-C4).
+    Later passes of one Apply re-plan the *same* scope with this switched off,
+    so the target set never drifts while the user is applying.
     """
     deck_name = str(cfg.get("deck_name") or "")
     note_type_name = str(cfg.get("note_type_name") or "")
@@ -401,6 +427,15 @@ def plan_preview(
         if missing:
             scope_label += f" · {len(missing)} selected note(s) no longer exist"
 
+    neighbours: list[int] = []
+    if expand_neighbours and bool(cfg.get("fix_neighbours", True)):
+        base = set(scope)
+        expanded = expand_scope_with_neighbours(records, cfg, scope)
+        neighbours = [nid for nid in expanded if nid not in base]
+        if neighbours:
+            scope = expanded
+            scope_label += f" · {len(neighbours)} neighbour(s) added from the same subtitle line"
+
     try:
         media_dir = col.media.dir() if col is not None and hasattr(col, "media") else None
     except Exception:
@@ -414,6 +449,7 @@ def plan_preview(
         media_exists=media_checker.exists,
         furigana_generator=japanese_support_furigana_generator(col),
         morph_tokenizer=japanese_support_morph_tokenizer(col),
+        neighbour_note_ids=neighbours,
     )
     return Preview(
         plan=plan,
@@ -422,6 +458,7 @@ def plan_preview(
         scope_label=scope_label,
         excluded=tuple(excluded),
         missing=tuple(missing),
+        neighbours=tuple(neighbours),
     )
 
 
@@ -433,19 +470,30 @@ def read_state(col, note_id: int) -> NoteState:
     )
 
 
-def build_decision(col, plan: Plan, checked, cfg: dict) -> ApplyDecision:
-    """Re-assert the checked rows against the live collection."""
+def build_decision(
+    col, plan: Plan, checked, cfg: dict, *, applied_tag: str | None = None
+) -> ApplyDecision:
+    """Re-assert the checked rows against the live collection.
+
+    ``applied_tag`` is left unset by default: the tag means "the add-on is
+    finished with this card", so it is applied by
+    :func:`apply_plan_to_fixpoint` once the card has no work left (B12).
+    """
     return decide(
         plan,
         checked,
         read_state=lambda note_id: read_state(col, note_id),
-        applied_tag=cfg.get("applied_tag") or None,
+        applied_tag=applied_tag,
     )
 
 
-def build_batch_decision(col, plan: Plan, rows, cfg: dict) -> ApplyDecision:
+def build_batch_decision(
+    col, plan: Plan, rows, cfg: dict, *, applied_tag: str | None = None
+) -> ApplyDecision:
     """Re-assert a batch selection: one ``(note_id, field)`` key per row."""
-    return build_decision(col, plan, [(w.note_id, w.field) for w in rows], cfg)
+    return build_decision(
+        col, plan, [(w.note_id, w.field) for w in rows], cfg, applied_tag=applied_tag
+    )
 
 
 def apply_decision(col, decision: ApplyDecision) -> int:
@@ -707,6 +755,29 @@ def apply_batch(
 MAX_APPLY_PASSES = 4
 
 
+def _replan(col, cfg: dict, scope, records_by_id: Mapping[int, NoteRecord] | None):
+    """Re-plan one pass against the live state, preferring the in-memory records.
+
+    Neighbour expansion is switched off: the target set was fixed when the user
+    opened the preview (QUALITY Q-C4), so a later pass must not grow it. The
+    layered calls keep the controller usable with the plain
+    ``plan_preview(col, cfg, scope_note_ids=...)`` signature.
+    """
+    attempts: list[dict] = []
+    if records_by_id is not None:
+        values = list(records_by_id.values())
+        attempts.append({"records": values, "expand_neighbours": False})
+        attempts.append({"records": values})
+    attempts.append({"expand_neighbours": False})
+    attempts.append({})
+    for extra in attempts:
+        try:
+            return plan_preview(col, cfg, scope_note_ids=list(scope), **extra)
+        except TypeError:
+            continue
+    return plan_preview(col, cfg, scope_note_ids=list(scope))
+
+
 def apply_plan_to_fixpoint(
     col,
     cfg: dict,
@@ -738,20 +809,11 @@ def apply_plan_to_fixpoint(
     records_by_id: dict[int, NoteRecord] | None = (
         dict(initial_records) if initial_records is not None else None
     )
+    final_plan: Plan | None = None
+    touched: set[int] = set()
     for _pass in range(MAX_APPLY_PASSES):
         if decision is None:
-            if records_by_id is not None:
-                try:
-                    preview = plan_preview(
-                        col,
-                        cfg,
-                        scope_note_ids=list(scope),
-                        records=list(records_by_id.values()),
-                    )
-                except TypeError:
-                    preview = plan_preview(col, cfg, scope_note_ids=list(scope))
-            else:
-                preview = plan_preview(col, cfg, scope_note_ids=list(scope))
+            preview = _replan(col, cfg, scope, records_by_id)
             if preview.plan is None or preview.error:
                 combined.problems.append(preview.error or "could not rebuild the plan")
                 break
@@ -765,9 +827,11 @@ def apply_plan_to_fixpoint(
                 else selection.rows
             )
             decision = build_batch_decision(col, preview.plan, rows, cfg)
+            final_plan = preview.plan
         if not decision.row_count():
             cleared = True
             break
+        touched.update(getattr(decision, "touched_notes", ()) or ())
         result = apply_batch(col, decision, meta, take_backup=not backed_up)
         backed_up = True  # at most one backup per Apply, before its first real pass
         combined.writes += result.writes
@@ -780,7 +844,7 @@ def apply_plan_to_fixpoint(
         if result.problems:
             break
         if records_by_id is not None and col is not None and hasattr(col, "get_note"):
-            for nid in decision.touched_notes:
+            for nid in getattr(decision, "touched_notes", ()) or ():
                 try:
                     note = col.get_note(nid)
                     records_by_id[nid] = _record_for_note(note)
@@ -790,19 +854,9 @@ def apply_plan_to_fixpoint(
     if not cleared and not combined.problems:
         # The pass bound was hit while the last pass still wrote. Re-plan once
         # and say so; a silent residual would break Q-A2 without a trace.
-        if records_by_id is not None:
-            try:
-                preview = plan_preview(
-                    col,
-                    cfg,
-                    scope_note_ids=list(scope),
-                    records=list(records_by_id.values()),
-                )
-            except TypeError:
-                preview = plan_preview(col, cfg, scope_note_ids=list(scope))
-        else:
-            preview = plan_preview(col, cfg, scope_note_ids=list(scope))
+        preview = _replan(col, cfg, scope, records_by_id)
         if preview.plan is not None:
+            final_plan = preview.plan
             remaining = select(preview.plan, default_ops(cfg))
             residual = (
                 [w for w in remaining.rows if (w.note_id, w.field) not in excluded_keys]
@@ -814,10 +868,88 @@ def apply_plan_to_fixpoint(
                     f"still {len(residual)} row(s) to write after "
                     f"{MAX_APPLY_PASSES} passes — press Apply again"
                 )
+    # The `applied_tag` means "the add-on is finished with this card", so it is
+    # written last, only for notes that ended the whole Apply with nothing left
+    # to do (no residual row, no guarded row, no reported reason, no row the
+    # user explicitly declined). A half-fixed card is never tagged (B12).
+    tag_path = _tag_finished_clean_notes(col, cfg, final_plan, touched, excluded_keys=excluded_keys)
+    if tag_path is not None:
+        log_paths.append(tag_path)
     merge_run_logs(log_paths)
     if log_paths:
         combined.log_path = log_paths[-1]
     return combined
+
+
+def _notes_finished_clean(
+    plan: Plan,
+    touched: Iterable[int],
+    *,
+    ops: frozenset[str] = frozenset(),
+    excluded_keys: AbstractSet[tuple[int, str]] = frozenset(),
+) -> list[int]:
+    """Notes that end the Apply with no work and no guard left (B12).
+
+    A note is *finished* when the final plan proposes no unchecked row of an
+    enabled op for it, no selected row survived for it, it carries no reason,
+    and the user did not decline any of its rows. A row whose tier the user
+    switched off is excluded by policy, not owed (``select``'s rule), so it
+    does not block the tag. Notes the run never touched are not candidates.
+    """
+    writes = getattr(plan, "writes", ())
+    reasons = getattr(plan, "reasons", {})
+    owed: set[int] = {w.note_id for w in writes if not w.default_checked and w.op in ops}
+    residual = {w.note_id for w in select(plan, ops).rows}
+    declined = {note_id for note_id, _field in excluded_keys}
+    blocked = owed | residual | set(reasons) | declined
+    return [note_id for note_id in sorted(set(touched)) if note_id not in blocked]
+
+
+def _tag_finished_clean_notes(
+    col,
+    cfg: dict,
+    plan: Plan | None,
+    touched: Iterable[int],
+    *,
+    excluded_keys: AbstractSet[tuple[int, str]] = frozenset(),
+) -> Path | None:
+    """Write the ``applied_tag`` onto every note the Apply finished cleanly."""
+    tag = str(cfg.get("applied_tag") or "")
+    if not tag or not isinstance(plan, Plan) or col is None or not hasattr(col, "get_note"):
+        return None
+    clean = _notes_finished_clean(plan, touched, ops=default_ops(cfg), excluded_keys=excluded_keys)
+    if not clean:
+        return None
+    rows: list[PlannedWrite] = []
+    for note_id in clean:
+        state = read_state(col, note_id)
+        if tag.lower() in {existing.lower() for existing in state.tags}:
+            continue
+        rows.append(
+            PlannedWrite(
+                note_id=note_id,
+                field="tags",
+                op=OP_ADD_TAGS,
+                old_value=" ".join(sorted(state.tags)),
+                new_value=" ".join(sorted({*state.tags, tag})),
+                default_checked=True,
+                badges=("card-finished-clean",),
+            )
+        )
+    if not rows:
+        return None
+    finished = Plan(writes=tuple(rows))
+    decision = build_batch_decision(
+        col,
+        finished,
+        rows,
+        cfg,
+        applied_tag=None,
+    )
+    if not decision.row_count():
+        return None
+    result = apply_batch(col, decision, {"kind": "finish-tag"}, take_backup=False)
+    return result.log_path
 
 
 def dry_run_folder() -> Path:

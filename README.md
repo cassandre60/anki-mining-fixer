@@ -49,7 +49,10 @@ and covered by tests, not just intended:
      card's own `Sentence` that (1) flattens the nested `<div>` block
      wrappers a styled `.vtt`/`.srt` leaves behind into plain `<br>` line
      breaks, (2) removes the subtitle's line-tail continuation arrows
-     (`➡`) and (3) joins a short speaker tag like `(荒木)` to its line.
+     (`➡`), (3) joins a short speaker tag like `(荒木)` to its line and
+     (4) removes a subtitle's show-specific reading annotation
+     (`本町(ほんちゅう)` → `本町`) — together with its ruby, never alone
+     (see below).
      Existing line breaks (`<br>`) and spacing are otherwise kept exactly as
      mined — they are the sentence's pause structure (owner decision
      2026-11-15, extended 2026-11-17; the recorded future direction is
@@ -92,10 +95,25 @@ and covered by tests, not just intended:
      and rebuilds the sentence, its furigana, audio, picture and source in
      one run. A blob link names no episode, so those cards are reported
      instead.
+   - Inline show-specific readings (`inline reading`): a subtitle often prints
+     a name with its *show-specific* reading, `本町(ほんちゅう)` — ほんちゅう
+     here, ほんちょう in the dictionary. The annotation is a reading aid, not
+     spoken text, so it leaves the `Sentence` and its kana replace the
+     dictionary reading of exactly that span in `Sentence (furigana)`
+     (`あそこの 本町[ほんちゅう]通り`). It is **all or nothing**: when the ruby
+     cannot carry the reading (no Japanese Support, the furigana dimension
+     off, or the span cannot be located without guessing) the sentence is
+     left exactly as mined and the card is reported — the annotation is the
+     only record of that pronunciation. `(笑)`-style asides, speaker tags and
+     anything not directly after a kanji run are never touched
+     (`batch_strip_inline_readings` is the escape hatch to switch it off).
    - Tags (`add_tags`): the target keeps its tags and gains every
      contributing source card's tags — a pure union that never removes;
      Anki control tags (`marked`, `leech`) and this tool's own tags
-     (`no-autofill`, `auto-filled`) never propagate.
+     (`no-autofill`, `auto-filled`) never propagate. `auto-filled` means
+     *"the add-on is finished with this card"*: it is added only to cards
+     that end a run with nothing left to do, so you can filter on it. A card
+     you want left alone forever gets `no-autofill` instead.
 3. **`Sentence` and `Sentence (furigana)` are atomic.** Both always come
    from the same parent — never mixed ruby from a second note, never stale
    fragment ruby left under a full scene. If the parent has no furigana and
@@ -110,7 +128,9 @@ and covered by tests, not just intended:
    no longer exists is dropped with a warning instead of producing a dead
    reference.
 6. **`no-autofill` opts a note out as a target.** Hand-edited notes remain
-   eligible as sources (they are good sources) and are badged when used.
+   eligible as sources (they are good sources) and are badged when used —
+   and a neighbour carrying it is never pulled into a run by scope
+   propagation.
 7. **Every run is reversible.** Every write carries its old value in a JSON
    run log; the future apply step restores field-by-field only where the
    card is untouched since.
@@ -159,11 +179,17 @@ installed; for a manual install, copy any installed add-on's and set
   finds its scene parents and word siblings even when those are not selected.
   Selected notes of another note type are reported and skipped; selections are
   deduplicated and keep their order.
+  Unless you untick it, the run also fixes the **other cards mined from the
+  same subtitle line** as the selection — they share the scene's `Sentence
+  Audio`, so one card from a scene fixes the line (the header says how many
+  were added, and every one of their rows is badged `scene-neighbour`).
+  `fix_neighbours` in the config is the default for that checkbox.
 
 Either entry opens the same dialog: every proposed write is one row (note,
 field, the exact old → new value, its source note, its badges). Rows the plan
 guarded arrive **unchecked**; the rest are checked. Nothing is written until
-you press Apply.
+you press Apply. Cards that end the run with nothing left to do get the
+`auto-filled` tag; a half-fixed card does not.
 
 - **Tools → "Mining Fixer: undo last run"** — restores exactly what the
   last apply replaced and removes exactly the tags it added.
@@ -188,7 +214,9 @@ you press Apply.
   mined fragment stays in `cloze-*`), replaces blob `Source` with the
   timestamped source (the URL stays in the run log), strips the
   line-end arrows and the stray line break after a speaker tag such as
-  ``(荒木)`` (other line breaks and spacing stay exactly as mined), rebuilds `Sentence (furigana)` through the
+  ``(荒木)`` (other line breaks and spacing stay exactly as mined), removes a
+  subtitle's inline show-specific reading together with its ruby (see
+  above), rebuilds `Sentence (furigana)` through the
   installed Japanese Support add-on — always from the sentence the run
   leaves behind, so cleaning happens before the ruby — and unions tags.
   **There are no options to tick.** One button, one pass.
@@ -196,7 +224,8 @@ you press Apply.
   off: `batch_expand_sentence`, `batch_replace_source`,
   `batch_scene_propagation`, `batch_repair_sentence` (with
   `sentence_repair_rules`), `batch_regenerate_furigana`,
-  `batch_repair_expression` — all default true. Without the Japanese Support
+  `batch_repair_expression`, `batch_strip_inline_readings`,
+  `fix_neighbours` — all default true. Without the Japanese Support
   add-on the furigana step reports itself unavailable and writes nothing.
   **View report** opens the full one-page human-readable summary inside Anki
   (word, note, what changes, what was left alone) without touching your
@@ -216,7 +245,8 @@ Apply is safe by construction:
   complete pass: it never leaves a card for a later press to finish — no
   cascade (a card completed here must not make a neighbour fillable only next
   time), no step deferred. A row already holding its target value is
-  recognised as done, never rewritten.
+  recognised as done, never rewritten. The `auto-filled` tag is written last,
+  only for the cards that ended the run clean.
 - **Undo log.** Each apply writes `run-<timestamp>.json` under
   `<profile>/mining_fixer/undo/` — old values, applied values, and the
   tags involved. Undo restores only notes whose values are still exactly
@@ -282,7 +312,7 @@ After auditing: delete the audit deck and the cloned note type.
 ## Development
 
 ```
-python3 -m pytest         # 312 tests with Anki; 310 + 2 self-skipping without
+python3 -m pytest         # 355 tests with Anki; 353 + 2 self-skipping without
 ruff check . && ruff format --check .
 ```
 

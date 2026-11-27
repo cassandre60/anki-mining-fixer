@@ -131,6 +131,7 @@ below, never as silent scope creep inside a coding session.
 | T32 | `tests/test_addon_load.py` (shortcuts, reviewer action), `tests/test_notify_collection_changed.py` (multi-card editor sync) |
 | T33 | `test_plan.py` (`test_bold_repair_covers_full_inflected_verb_not_bare_stem`); closes #11 |
 | T34 | `test_normalize.py` (`test_normalize_parens_*`), `test_plan.py` (Sentence-field-only scope, shipped default); issue #16 |
+| T35 | `test_plan.py` (`test_expansion_anchors_on_inflected_verb_surface_issue_15`, `test_bold_repair_covers_nominalized_adjective_span`); closes #15, #17 |
 
 - **T13 — Dimension picker in the batch window (B7) — superseded.** Built
   on 2026-11-16 with three checkboxes (scene / arrows / furigana) and pure
@@ -345,11 +346,65 @@ below, never as silent scope creep inside a coding session.
   (`test_normalize_parens_*`) and `test_plan.py` (Sentence-field-only scope
   and the shipped default).
 
-- **T35 — Nominalizer suffix in inflected bold (issue #17).** Tier 5 of
-  `_bold_repair_for` now consumes nominalizer suffixes (さ, み, げ) after an
-  inflected adjective, so an i-adjective with a nominalizer (愚かしさ) is
-  bolded as the full word instead of the bare stem (愚かし). `_is_morph_match`
-  recognises the same suffixes. Issue #17 direction 2 (partial).
+- **T35 — Inflected expansion anchors and nominalized adjective bolding (issues #15, #17).**
+  `_expansion_anchor` now uses in-context morphological token matching (`_matches_morph_token`)
+  and suffix consumption (`_consume_inflected_span`) instead of isolating tokens and stripping
+  context. This allows word-mined cards to anchor expansions on inflected verbs (e.g. `夢見る`
+  anchoring on `夢見た`, issue #15) and nominalized adjectives (`愚かしい` anchoring on `愚かしさ`,
+  issue #17), shipping both the expansion and `Sentence Audio` checked as a unit (Q-D16).
+  In addition, `_bold_repair_for` and `_is_morph_match` now consume nominalizing adjective
+  suffixes (`さ`, `み`, `げ`), bolding the full word (`<b>愚かしさ</b>`) and rejecting bare stems
+  (`<b>愚かし</b>`). Closes issues #15 and #17.
+- **T36 — Inline subtitle readings and same-line scope propagation (issues #9,
+  #20; `PLAN_VERSION` 9).** The reported defect was that fixing one card left
+  its scene neighbours untouched; the investigation found the scope cap
+  (Q-C6) *and* four pipeline defects, all fixed here.
+  - **Scope (B12).** `plan.expand_scope_with_neighbours` widens the target set
+    to the selection's same-subtitle-line neighbours — shared non-word
+    `Sentence Audio`, a contained unenriched fragment, and a fragment's scene
+    parent (and that parent's own line siblings) — inside `±window_days`,
+    excluding `optout_tag` notes. `collection_io.plan_preview` applies it when
+    `fix_neighbours` is on (default), names the added cards in the scope label
+    and badges every propagated row `scene-neighbour`; both dialogs carry the
+    "Also fix the other cards mined from the same subtitle line" checkbox and
+    re-plan on toggle (the preview is the truth, Q-C4). Later passes of one
+    Apply re-plan the *same* scope with the expansion off, so the target set
+    never drifts. `applied_tag` now means "the add-on is finished with this
+    card": `apply_plan_to_fixpoint` writes it last, only for notes that ended
+    with no residual row, no guarded row, no reason and nothing declined
+    (Q-C11).
+  - **Root cause 2 — containment broke on the annotation.** The scene key is
+    now computed on the annotation-free sentence (`build_plan` pre-seeds the
+    normalization cache), so a card whose parent still reads
+    `本町(ほんちゅう)` is contained in that parent's block and the scene is
+    found at all.
+  - **Root cause 4 — the ruby-preservation guard.** `_furigana_write_for` grew
+    `allow_override`: an inline-reading fix *must* rebuild the ruby even when
+    the current value already describes the sentence (otherwise the strip was
+    rolled back and nothing happened), and a regenerated value identical to
+    the field is never written.
+  - **The override ran against the wrong text.** The span merge received the
+    raw sentence instead of the written one; it now receives the post-write
+    Sentence and rolls back only its own strip when it cannot align.
+  - **MeCab's spacing split the annotated name.** `override_furigana_reading`
+    matches the base across the engine's spaces
+    (`炭[たん] 治郎[じろう]` → `炭治郎[たんじろう]`), refuses to cut inside one
+    engine reading, and keeps every other span byte-identical. Measured on the
+    configured deck: **309 of 315** inline-reading cards now fix in one pass
+    (the other six are reported: four compound tokens the engine keeps whole,
+    two truncated-`cloze-body` cards whose anchor guard holds).
+  - **The detector missed the bolded shape.** The subtitle bolds the word it
+    annotates (`<b>槍</b>(やり)`); the detector now tolerates exactly the
+    deck's `<b>` markup between the run and its annotation (kept), accepts
+    full-width parens, and refuses a one-kanji run (a truncated name fragment
+    in this deck: `浦(みうら)` from 三浦).
+  - **Ordering.** Bold, scene expansion and the inline strip now share one
+    `Sentence` write instead of deferring each other across passes, and the
+    bold path's own repair rules keep the tested-word occurrence guard.
+  - Pinned by `tests/test_normalize.py`, `tests/test_plan.py`,
+    `tests/test_apply_fixpoint.py` and the badge-coverage list in
+    `tests/test_report_summary.py`; every new test was run against the
+    pre-fix tree and fails there.
 
 ## Backlog
 
@@ -436,9 +491,12 @@ below, never as silent scope creep inside a coding session.
   detail-pane explanations, filter bar, check-column guard-reason tooltips with
   manual override tracking).
 - **B12 — Fix a card's neighbours; do not re-fix a fixed card** (owner ask
-  2026-11-25; decisions 2026-11-26). **Design only — not started.** The three
-  owner requests, and the choices made, are recorded here so implementation
-  follows them instead of re-litigating.
+  2026-11-25; decisions 2026-11-26). **Shipped as T36** (2026-11-27): scope
+  propagation to the same subtitle line (`fix_neighbours`, checkbox on by
+  default), clean-run `applied_tag` semantics, and the issue-#9/#20 inline
+  reading pipeline. The original design notes are kept below for the record.
+  The three owner requests, and the choices made, are recorded here so
+  implementation follows them instead of re-litigating.
 
   **The requests.**
   1. A checkbox: *fixing a card fixes its neighbours* (when on).

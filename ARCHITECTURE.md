@@ -73,7 +73,14 @@ notes to *fix*, while every record stays eligible as a source. The Tools menu
 passes the newest `preview_last_n` notes; the Browser context menu passes the
 selection (`plan.scope_from_selection` dedupes it and reports ids that do not
 resolve), after `collection_io.plan_preview` has loaded any selected note that
-lives outside the configured deck. Nothing else differs.
+lives outside the configured deck. Both then widen the target set to the
+selection's **same-subtitle-line neighbours** with
+`plan.expand_scope_with_neighbours` (shared `Sentence Audio`, a contained
+fragment, or a fragment's scene parent, inside `±window_days`) unless
+`fix_neighbours` is off or the dialog's checkbox is unticked; the added ids go
+to `build_plan(..., neighbour_note_ids=...)` for the `scene-neighbour` badge.
+Later passes of one Apply re-plan the same scope with the expansion off, so
+the target set never drifts after the preview (Q-C4).
 
 **Batch path.** For a large selection the plan is reduced by `batch.select`
 before anything is decided: a policy of allowed ops (lossless by default;
@@ -97,7 +104,7 @@ the first write, chunked apply, post-write verification.
 - `NoteState`, `ApplyDecision` (`applier.py`) — the live values read back at
   apply time and the resulting writes/skips.
 
-`PLAN_VERSION` (currently **6**) is bumped whenever the plan's meaning changes;
+`PLAN_VERSION` (currently **9**) is bumped whenever the plan's meaning changes;
 it is recorded in every audit log so old and new plans are distinguishable.
 
 ## The nine ops
@@ -108,8 +115,8 @@ it is recorded in every audit log so old and new plans are distinguishable.
 | `replace_source` | yes | old value is an asbplayer blob URL; the URL is kept in the run log |
 | `expand_sentence` | yes | the card is missing its `Sentence Audio`; the scene matcher proved its sentence is contained in the new one (so the fragment is kept, Q-D16); the cloze anchor occurs exactly once — or inside the card's own fragment; furigana ships in the same row, is regenerated in the same plan, or the row is unchecked |
 | `bold_cloze_word` | yes (markup / noise only) | `strip_renderable(new) == strip_renderable(cleaned_old)`; the word occurs exactly once |
-| `repair_sentence` | yes (configured noise only) | only the configured rules change the value; no other `Sentence` write queued; tested-word occurrence count unchanged |
-| `regenerate_furigana` | yes | generated from the post-write sentence; no other `Sentence (furigana)` write queued; ruby base text must equal the sentence (`furigana_base_matches`) |
+| `repair_sentence` | yes (configured noise only) | only the configured rules change the value; no other `Sentence` write queued; tested-word occurrence count unchanged; an inline reading (`strip-inline-readings`) requires a ruby write that can carry its reading (Q-C10) |
+| `regenerate_furigana` | yes | generated from the post-write sentence; no other `Sentence (furigana)` write queued; ruby base text must equal the sentence (`furigana_base_matches`); an inline-reading override may replace the reading of the annotated span only (Q-C10) |
 | `repair_expression` | yes | self-oracled from the note's own `furigana` base; reading matches `reading_from_furigana`; word-like kanji completion only; deferred while word fills are queued |
 | `strip_empty_glossary` | yes | clears a definition field holding only empty container markup (`normalize.is_empty_glossary_shell`) |
 | `add_tags` | yes | `new_value` tags ⊇ `old_value` tags; reserved tags excluded |
@@ -134,6 +141,11 @@ overwrite content; a test asserts nothing else ever does.
   `Definition` and `Extended definition` belong to `FIELD_NEVER_COPY` and are
   never copied between cards; empty Yomitan `<ol></ol>` shells in definition
   fields are cleared by `strip_empty_glossary`.
+- **Scene key with inline readings.** A show-specific reading annotation
+  (`本町(ほんちゅう)`) is not spoken text, so a card carrying one is matched on
+  the annotation-free text (`build_plan` pre-seeds the normalization cache with
+  `detect_inline_readings`'s cleaned sentence). Without it the annotated card
+  is not contained in its own siblings' blocks and the whole scene is missed.
 - **Bold repair** (`plan._bold_repair_for`). Tier 1: the `cloze-body` occurs
   exactly once in `Sentence` → wrap it. Tier 2 (body absent, i.e. `cloze-*`
   hold dictionary-entry text): try `Expression` verbatim. Tier 3: mixed-kana
@@ -160,6 +172,13 @@ overwrite content; a test asserts nothing else ever does.
   *already applied*; re-running a plan writes nothing and reports
   `already applied`.
 - **Tags only grow.** The tag write is a union with the live tag set.
+- **One Apply, many passes.** `collection_io.apply_plan_to_fixpoint` re-plans
+  on the real post-write state until a pass writes nothing, then writes the
+  `applied_tag` ("the add-on is finished with this card") for the notes that
+  ended clean — no residual row, no guarded row, no reason, nothing the user
+  declined (`_tag_finished_clean_notes`, Q-C11). That tag write is a normal
+  `add_tags` decision, logged and merged with the rest, so one Undo reverses
+  it with the fields.
 - **Undo.** `build_run_log` records, per note, each `(field, prior, applied)`
   and the tags before/after. `decide_undo` restores only fields still holding
   the applied value, removes only the tags the run added, and reports
@@ -179,7 +198,8 @@ default; user edits live in `meta.json` and are merged over it by
 `note_type_name`, `window_days`, `preview_last_n`, `scene_auto_gap_hours`,
 `batch_expand_sentence`, `batch_replace_source`, `batch_scene_propagation`,
 `batch_repair_sentence`, `sentence_repair_rules`, `batch_regenerate_furigana`,
-`batch_repair_expression`, `min_sentence_len`, `scene_fill_fields`,
+`batch_repair_expression`, `batch_bold_inflected`, `batch_strip_inline_readings`,
+`fix_neighbours`, `min_sentence_len`, `scene_fill_fields`,
 `scene_replace_fields`, `scene_optin_fields`, `word_fill_fields`,
 `never_copy_fields`, `definition_fields`, `translation_autocheck`,
 `notes_autocheck`, `replaces_autocheck`, `optout_tag`, `applied_tag`.

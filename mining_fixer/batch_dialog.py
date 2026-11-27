@@ -12,6 +12,7 @@ wants a dimension off; the window itself stays out of the way.
 from __future__ import annotations
 
 from aqt.qt import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFont,
@@ -42,6 +43,9 @@ from .matching import NoteRecord
 from .plan import OP_ADD_TAGS
 from .report import GLANCE_LIMIT, OP_LABELS, change_lines, render_batch_summary
 
+#: The scope checkbox, worded so the user knows exactly what it widens.
+NEIGHBOUR_LABEL = "Also fix the other cards mined from the same subtitle line"
+
 
 def _op_breakdown(selection: BatchSelection) -> str:
     """What the run will do, by dimension: '8 furigana regenerated · 5 fill · 2 tags added'."""
@@ -67,7 +71,8 @@ class BatchDialog(QDialog):
         self.col = col
         self.cfg = cfg if cfg is not None else load_config()
         self.browser = browser
-        self.preview: Preview = plan_preview(col, self.cfg, scope_note_ids)
+        self.scope_note_ids = list(scope_note_ids) if scope_note_ids is not None else None
+        self.preview: Preview = plan_preview(col, self.cfg, self.scope_note_ids)
         self.pending: (
             tuple[
                 ApplyDecision,
@@ -94,7 +99,18 @@ class BatchDialog(QDialog):
         font = QFont()
         font.setBold(True)
         title.setFont(font)
+        self.title = title
         layout.addWidget(title)
+
+        self.neighbour_box = QCheckBox(NEIGHBOUR_LABEL)
+        self.neighbour_box.setChecked(bool(self.cfg.get("fix_neighbours", True)))
+        self.neighbour_box.setToolTip(
+            "Cards sharing this scene's Sentence Audio (the same subtitle line), "
+            "plus a selected fragment's scene parent, are fixed in the same run. "
+            "Unticked, only the selected cards are changed."
+        )
+        self.neighbour_box.toggled.connect(self._on_neighbours_toggled)
+        layout.addWidget(self.neighbour_box)
 
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
@@ -133,6 +149,19 @@ class BatchDialog(QDialog):
 
     # --- state --------------------------------------------------------
 
+    def _on_neighbours_toggled(self, checked: bool) -> None:
+        """Re-plan when the user changes the scope: the preview is the truth."""
+        self.cfg = {**self.cfg, "fix_neighbours": bool(checked)}
+        self.preview = plan_preview(self.col, self.cfg, self.scope_note_ids)
+        if self.preview.error:
+            self.summary.setText(self.preview.error)
+            self.apply_button.setEnabled(False)
+            self.changes_button.setVisible(False)
+            self.left_button.setVisible(False)
+            return
+        self.title.setText(self.preview.scope_label)
+        self._refresh()
+
     def _selection(self) -> BatchSelection:
         plan = self.preview.plan
         assert plan is not None
@@ -146,6 +175,7 @@ class BatchDialog(QDialog):
             "kind": "batch",
             "deck": self.cfg.get("deck_name"),
             "scope": len(self.preview.scope),
+            "neighbours": len(self.preview.neighbours),
             "rows": len(selection.rows),
             "notes": selection.notes,
             "ops": sorted({write.op for write in selection.rows}),
