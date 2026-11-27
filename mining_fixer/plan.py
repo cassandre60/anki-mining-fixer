@@ -30,6 +30,7 @@ from .matching import (
     DEFAULT_SCENE_OPTIN_FIELDS,
     DEFAULT_SCENE_REPLACE_FIELDS,
     MAX_WINDOW_MS,
+    MIN_FRAGMENT_CHARS,
     NoteRecord,
     SceneMatch,
     SceneParentIndex,
@@ -65,10 +66,11 @@ __all__ = [
     "Plan",
     "PlannedWrite",
     "build_plan",
+    "expand_scope_with_neighbours",
     "scope_from_selection",
 ]
 
-PLAN_VERSION = 8
+PLAN_VERSION = 9
 
 OP_FILL = "fill"
 OP_REPLACE_SOURCE = "replace_source"
@@ -709,11 +711,19 @@ def _bold_repair_for(
         ):
             work_sentence = trimmed_sentence
             noise_rules: tuple[str, ...] = ()
+            cleaned = trimmed_sentence
             if rules:
                 cleaned, noise_rules = repair_sentence(trimmed_sentence, rules)
                 if noise_rules:
-                    work_sentence = cleaned
-            if strip_renderable(work_sentence) == strip_renderable(raw_sentence):
+                    body_check = strip_renderable(target.get("cloze-body")).strip()
+                    if body_check and strip_renderable(trimmed_sentence).count(
+                        body_check
+                    ) != strip_renderable(cleaned).count(body_check):
+                        noise_rules = ()
+                    else:
+                        work_sentence = cleaned
+            expected_base = cleaned if noise_rules else raw_sentence
+            if strip_renderable(work_sentence) == strip_renderable(expected_base):
                 write = PlannedWrite(
                     note_id=target.note_id,
                     field="Sentence",
@@ -731,7 +741,13 @@ def _bold_repair_for(
         if rules:
             cleaned, noise_rules = repair_sentence(work_sentence, rules)
             if noise_rules:
-                work_sentence = cleaned
+                body_check = strip_renderable(target.get("cloze-body")).strip()
+                if body_check and strip_renderable(work_sentence).count(
+                    body_check
+                ) != strip_renderable(cleaned).count(body_check):
+                    noise_rules = ()
+                else:
+                    work_sentence = cleaned
         normalised = _bold_normalized_sentence(
             work_sentence,
             placeable,
@@ -762,7 +778,13 @@ def _bold_repair_for(
     if rules:
         cleaned, noise_rules = repair_sentence(sentence, rules)
         if noise_rules:
-            sentence = cleaned
+            body_check = strip_renderable(target.get("cloze-body")).strip()
+            if body_check and strip_renderable(sentence).count(body_check) != strip_renderable(
+                cleaned
+            ).count(body_check):
+                noise_rules = ()
+            else:
+                sentence = cleaned
     body = strip_renderable(target.get("cloze-body")).strip()
     expr = strip_renderable(target.get("Expression")).strip()
 
@@ -1098,6 +1120,8 @@ def _furigana_write_for(
     target: NoteRecord,
     generator,
     target_writes: list[PlannedWrite],
+    *,
+    allow_override: bool = False,
 ) -> tuple[PlannedWrite | None, str | None, str | None]:
     """Rebuild the target's ``Sentence (furigana)`` from its own Sentence.
 
@@ -1166,9 +1190,11 @@ def _furigana_write_for(
     # reading. This preserves show-specific overrides (issue #9) and avoids
     # clobbering a valid ruby when only markup (bold) changed in the
     # sentence. Plain-text (bracket-less) ruby is always regenerated.
-    if not stale and current.strip() and ("[" in current and "]" in current):
+    # When stripping inline readings (`allow_override=True`), allow regeneration
+    # so the override can apply if the existing ruby still had dictionary readings.
+    if not allow_override and not stale and current.strip() and ("[" in current and "]" in current):
         return None, None, None
-    if generated == current and not stale:
+    if not allow_override and generated == current and not stale:
         return None, None, None
     if not furigana_base_matches(generated, sentence):
         return (
@@ -2339,6 +2365,122 @@ def _tags_write_for(
     )
 
 
+def expand_scope_with_neighbours(
+    records: Sequence[NoteRecord],
+    cfg: dict,
+    selected_ids: Iterable[int],
+) -> list[int]:
+    """Expand a selection to include same-subtitle-line neighbours (B12).
+
+    Pure (QUALITY Q-S1). Neighbours are cards from the *same scene line* within
+    ``±window_days`` (capped at ``MAX_WINDOW_MS``, Q-C2):
+
+    - Cards sharing a non-word ``Sentence Audio`` filename with a selected card.
+    - Unenriched child cards (empty ``Sentence Audio``) whose normalized
+      ``Sentence`` is contained in a selected audio-bearing card's ``Sentence``.
+    - Scene parents (and their audio/containment siblings) for a selected
+      unenriched card whose normalized ``Sentence`` is contained in the parent's.
+    - Unenriched identical-sentence siblings when both lack ``Sentence Audio``.
+
+    Same-word and same-episode-only cards are deliberately excluded. Neighbours
+    carrying ``optout_tag`` (``no-autofill``) are never added (Q-C5). Order of
+    ``selected_ids`` is preserved (deduplicated); added neighbours follow in
+    ascending ``note_id`` order.
+    """
+    by_id = {r.note_id: r for r in records}
+    base_scope = list(dict.fromkeys(int(nid) for nid in selected_ids if int(nid) in by_id))
+    if not base_scope:
+        return []
+
+    window_ms = min(int(cfg.get("window_days", 3)) * DAY_MS, MAX_WINDOW_MS)
+    min_len = int(cfg.get("min_sentence_len", 6))
+    optout = cfg.get("optout_tag", "no-autofill")
+
+    sorted_records = sorted(records, key=lambda r: r.note_id)
+    sorted_ids = [r.note_id for r in sorted_records]
+
+    norm_cache: dict[int, str] = {}
+
+    def line_key(record: NoteRecord) -> str:
+        cached = norm_cache.get(record.note_id)
+        if cached is not None:
+            return cached
+        sent = record.get("Sentence") or ""
+        cleaned, _anns = detect_inline_readings(sent)
+        key = norm_sentence_match(cleaned or sent)
+        norm_cache[record.note_id] = key
+        return key
+
+    def scene_audio_files(record: NoteRecord) -> tuple[str, ...]:
+        val = record.get("Sentence Audio")
+        if is_empty(val) or is_word_media(val) or is_word_media(record.get("Picture")):
+            return ()
+        return tuple(sound_files(val))
+
+    seen = set(base_scope)
+    added: set[int] = set()
+
+    def consider(candidate: NoteRecord) -> None:
+        nid = candidate.note_id
+        if nid in seen or nid in added or optout in candidate.tags:
+            return
+        added.add(nid)
+
+    for sid in base_scope:
+        sel = by_id[sid]
+        lo = bisect.bisect_left(sorted_ids, sid - window_ms)
+        hi = bisect.bisect_right(sorted_ids, sid + window_ms)
+        window_recs = sorted_records[lo:hi]
+
+        sel_audio = set(scene_audio_files(sel))
+        sel_key = line_key(sel)
+
+        if sel_audio:
+            for r in window_recs:
+                if r.note_id == sid:
+                    continue
+                r_audio = set(scene_audio_files(r))
+                if sel_audio & r_audio or (
+                    is_empty(r.get("Sentence Audio"))
+                    and len(sel_key) >= min_len
+                    and len(line_key(r)) >= MIN_FRAGMENT_CHARS
+                    and line_key(r) in sel_key
+                ):
+                    consider(r)
+        elif len(sel_key) >= MIN_FRAGMENT_CHARS:
+            # Unenriched selected card: find audio-bearing parents of this line
+            # inside the window, plus their same-line siblings (bounded to sid's window).
+            matched_parents: list[NoteRecord] = []
+            parent_audio: set[str] = set()
+            for r in window_recs:
+                if r.note_id == sid:
+                    continue
+                r_audio = set(scene_audio_files(r))
+                r_key = line_key(r)
+                if r_audio:
+                    if len(r_key) >= min_len and sel_key in r_key:
+                        consider(r)
+                        matched_parents.append(r)
+                        parent_audio.update(r_audio)
+                elif len(sel_key) >= min_len and r_key == sel_key:
+                    consider(r)
+            if matched_parents:
+                for r in window_recs:
+                    if r.note_id == sid:
+                        continue
+                    r_audio = set(scene_audio_files(r))
+                    if r_audio & parent_audio:
+                        consider(r)
+                    elif is_empty(r.get("Sentence Audio")):
+                        r_key = line_key(r)
+                        if len(r_key) >= MIN_FRAGMENT_CHARS and any(
+                            r_key in line_key(p) for p in matched_parents
+                        ):
+                            consider(r)
+
+    return base_scope + sorted(added)
+
+
 def scope_from_selection(
     selected: Sequence[int], available: Iterable[int]
 ) -> tuple[list[int], list[int]]:
@@ -2497,6 +2639,7 @@ def build_plan(
     media_exists=None,
     furigana_generator=None,
     morph_tokenizer: Callable[[str], Sequence[MorphToken]] | None = None,
+    neighbour_note_ids: Iterable[int] | None = None,
 ) -> Plan:
     """Build the full plan.
 
@@ -2512,6 +2655,18 @@ def build_plan(
     min_len = int(cfg.get("min_sentence_len", 6))
     cache: dict[int, str] = {}
     by_id = {r.note_id: r for r in records}
+    if bool(cfg.get("batch_strip_inline_readings", True)):
+        # A show-specific reading annotation is a reading aid, not spoken text:
+        # the scene key must compare what the clip says. Without this a card
+        # whose parent still carries 本町(ほんちゅう) is *not* contained in that
+        # parent's block, so the whole scene is missed (issue #20).
+        for record in records:
+            sentence = record.get("Sentence") or ""
+            if "(" not in sentence and "\uff08" not in sentence:
+                continue
+            cleaned, annotations = detect_inline_readings(sentence)
+            if annotations and cleaned != sentence:
+                cache[record.note_id] = norm_sentence_match(cleaned)
 
     parents_by_id = {
         r.note_id: r
@@ -2551,12 +2706,19 @@ def build_plan(
     unknown_rules = [rule for rule in raw_repair_rules if rule not in REPAIR_RULES]
     if unknown_rules:
         warnings.append(f"unknown sentence_repair_rules ignored: {', '.join(unknown_rules)}")
-    repair_rules = tuple(rule for rule in raw_repair_rules if rule in REPAIR_RULES)
+    strip_inline_enabled = bool(cfg.get("batch_strip_inline_readings", True))
+    repair_rules = tuple(
+        rule
+        for rule in raw_repair_rules
+        if rule in REPAIR_RULES and (strip_inline_enabled or rule != "strip-inline-readings")
+    )
+    non_inline_rules = tuple(rule for rule in repair_rules if rule != "strip-inline-readings")
     # Minimal test configs omit `batch_regenerate_furigana` when exercising
     # non-furigana tiers headless; the shipped `config.json` sets it to true.
     furigana_tier = bool(cfg.get("batch_regenerate_furigana", False))
     expression_tier = bool(cfg.get("batch_repair_expression", True))
     bold_inflected = bool(cfg.get("batch_bold_inflected", True))
+    neighbour_set = frozenset(neighbour_note_ids) if neighbour_note_ids else frozenset()
     # Fields whose queued values come from the old spelling's word group;
     # the Expression rewrite must not land in the same run as them.
     word_fields = frozenset({*cfg.get("word_fill_fields", ()), "Expression"})
@@ -2609,7 +2771,10 @@ def build_plan(
             continue
         target_writes: list[PlannedWrite] = []
         # Inline subtitle readings (issue #9): show-specific reading in parens.
-        inline_cleaned, inline_anns = detect_inline_readings(target.get("Sentence") or "")
+        if strip_inline_enabled:
+            inline_cleaned, inline_anns = detect_inline_readings(target.get("Sentence") or "")
+        else:
+            inline_cleaned, inline_anns = target.get("Sentence") or "", []
         scene_writes, reason = [], None
         # A shared-audio sibling whose full block still contains this card's
         # fragment is the "audio filled, sentence skipped" shape: the card
@@ -2657,10 +2822,6 @@ def build_plan(
         # Sentence Audio is fill-only (QUALITY Q-D1): a card that already has its
         # own audio is a scene unit and is never overwritten.
         for w in scene_writes:
-            if inline_anns and w.op == OP_EXPAND_SENTENCE:
-                # Defer scene completion so the inline strip can run this pass;
-                # the expansion re-plans next pass once the sentence is clean.
-                continue
             if w.source_note_id:
                 parent_usage[w.source_note_id] = parent_usage.get(w.source_note_id, 0) + 1
             if media_exists is not None and w.op == OP_FILL:
@@ -2722,13 +2883,12 @@ def build_plan(
                     reasons[target.note_id] = repair_expr_reason
         # Markup-only bold repair and subtitle-noise repair when no checked
         # scene expansion already owns Sentence.
+        can_override_ruby = furigana_tier and furigana_generator is not None
         target_repair_rules = repair_rules
-        if (
-            inline_anns
-            and furigana_generator is not None
-            and "strip-inline-readings" not in target_repair_rules
-        ):
+        if inline_anns and can_override_ruby and "strip-inline-readings" not in target_repair_rules:
             target_repair_rules = target_repair_rules + ("strip-inline-readings",)
+        elif not can_override_ruby:
+            target_repair_rules = non_inline_rules
         _append_local_sentence_writes(
             target,
             target_writes,
@@ -2737,40 +2897,65 @@ def build_plan(
             warnings,
             morph_tokenizer=morph_tokenizer,
             batch_bold_inflected=bold_inflected,
-            skip_bold=bool(inline_anns),
+            skip_bold=False,
         )
         # The ruby must describe the Sentence this card ends up with: drop a
         # checked ruby copied from another card's line *before* the ruby
         # repair / regeneration steps, so the field is either cleaned or
         # correctly regenerated rather than carrying the wrong text.
         target_writes = _drop_rubies_that_do_not_describe_the_sentence(target, target_writes)
-        had_checked_expansion = any(
-            w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE and w.default_checked
-            for w in target_writes
+        exp_write = next(
+            (
+                w
+                for w in target_writes
+                if w.field == "Sentence" and w.op == OP_EXPAND_SENTENCE and w.default_checked
+            ),
+            None,
         )
+        had_checked_expansion = exp_write is not None
         effective_sentence = next(
             (w.new_value for w in target_writes if w.field == "Sentence" and w.default_checked),
             target.get("Sentence") or "",
         )
+        # Determine active inline annotations for the post-write Sentence:
+        # if a checked scene expansion copied & stripped a parent containing
+        # inline readings, those parent annotations govern the ruby override.
+        active_anns: list[dict] = []
+        if exp_write is not None:
+            if (
+                strip_inline_enabled
+                and "expanded-strip-inline-readings" in exp_write.badges
+                and exp_write.source_note_id is not None
+                and exp_write.source_note_id in by_id
+            ):
+                _, active_anns = detect_inline_readings(
+                    by_id[exp_write.source_note_id].get("Sentence") or ""
+                )
+        else:
+            active_anns = inline_anns
+
+        sentence_changed = any(w.field == "Sentence" and w.default_checked for w in target_writes)
         # The ruby field carries the same subtitle arrows (owner report
-        # 2026-11-16): clean it too, unless a checked write already targets it
-        # or a checked expansion changed Sentence to text this ruby no longer
-        # describes (in which case furigana regeneration must own the field).
-        if repair_rules and not any(
-            w.field == FURIGANA_FIELD and w.default_checked for w in target_writes
+        # 2026-11-16): clean it too, unless a checked write already targets it,
+        # an inline-reading override needs regeneration, or a Sentence write
+        # changed Sentence to text this ruby no longer describes.
+        if (
+            repair_rules
+            and not active_anns
+            and not any(w.field == FURIGANA_FIELD and w.default_checked for w in target_writes)
         ):
             ruby_write, _ruby_reason, _ruby_detail = _ruby_repair_write(target, repair_rules)
             if ruby_write is not None and (
-                not had_checked_expansion
+                not sentence_changed
                 or not effective_sentence.strip()
                 or furigana_base_matches(ruby_write.new_value, effective_sentence)
             ):
                 target_writes.append(ruby_write)
-        # Inline subtitle readings (issue #9): strip the annotation and queue
-        # the ruby override, as one operation. The strip runs here (before
-        # the furigana tier) so the ruby is generated from the cleaned text.
-        if inline_anns:
-            if furigana_generator is None:
+        # Inline subtitle readings (issue #9): strip the annotation when not
+        # already stripped by bold/expansion, so the furigana tier generates
+        # from the cleaned sentence.
+        if inline_anns and exp_write is None:
+            if not can_override_ruby:
                 reasons[target.note_id] = "inline-reading-no-ruby"
             elif not any(w.field == "Sentence" and w.default_checked for w in target_writes):
                 ir_write, _ir_reason, _ir_detail = _sentence_repair_write(
@@ -2794,7 +2979,10 @@ def build_plan(
                     )
             elif not any(w.field == FURIGANA_FIELD and w.default_checked for w in target_writes):
                 furigana_write, furigana_reason, furigana_detail = _furigana_write_for(
-                    target, furigana_generator, target_writes
+                    target,
+                    furigana_generator,
+                    target_writes,
+                    allow_override=bool(active_anns),
                 )
                 if furigana_write is not None:
                     target_writes.append(furigana_write)
@@ -2804,56 +2992,94 @@ def build_plan(
                         f"note {target.note_id} ({expr}): furigana regeneration"
                         f" skipped — {furigana_detail}"
                     )
-        # A completion must never ship checked under a ruby that still
-        # describes the card's old text (Q-D4/Q-D15): if the regeneration
-        # engine was present but produced nothing, demote it (keeping the
-        # unchecked expansion visible with `stale-fragment-furigana-risk`), and
-        # still clean subtitle noise in the kept fragment ruby.
-        # Inline subtitle readings (issue #9): atomicity — the sentence strip
-        # only lands if the ruby override succeeds.
-        if inline_anns:
-            if furigana_generator is None:
-                reasons[target.note_id] = "inline-reading-no-ruby"
-            else:
-                fw = next((w for w in target_writes if w.field == FURIGANA_FIELD), None)
-                if fw is not None:
-                    new_ruby = override_furigana_reading(fw.new_value, inline_cleaned, inline_anns)
-                    if new_ruby is None:
-                        target_writes = [
-                            w
-                            for w in target_writes
-                            if not (
-                                w.field == "Sentence"
-                                and w.op == OP_REPAIR_SENTENCE
-                                and "strip-inline-readings" in w.badges
-                            )
-                            and w.field != FURIGANA_FIELD
-                        ]
-                        reasons[target.note_id] = "inline-reading-no-ruby"
-                    else:
-                        target_writes = [
-                            (
-                                replace(
-                                    w,
-                                    new_value=new_ruby,
-                                    badges=(*w.badges, "ruby-reading-overridden"),
-                                )
-                                if w is fw
-                                else w
-                            )
-                            for w in target_writes
-                        ]
-                else:
+        # Inline subtitle readings (issue #9): atomicity — a sentence strip
+        # only lands when the ruby carries the overridden reading.
+        if active_anns:
+            effective_after_sentence = next(
+                (w.new_value for w in target_writes if w.field == "Sentence" and w.default_checked),
+                inline_cleaned,
+            )
+            fw = next(
+                (w for w in target_writes if w.field == FURIGANA_FIELD and w.default_checked), None
+            )
+            new_ruby = (
+                override_furigana_reading(fw.new_value, effective_after_sentence, active_anns)
+                if fw is not None
+                else None
+            )
+            if fw is None or new_ruby is None:
+                # Roll back the inline-reading strip cleanly while keeping
+                # non-inline repairs (e.g. bold or arrows) alive.
+                stripped_sentence = any(
+                    w.field == "Sentence" and "strip-inline-readings" in w.badges
+                    for w in target_writes
+                )
+                stripped_expansion = (
+                    exp_write is not None and "expanded-strip-inline-readings" in exp_write.badges
+                )
+                if stripped_sentence:
                     target_writes = [
                         w
                         for w in target_writes
-                        if not (
-                            w.field == "Sentence"
-                            and w.op == OP_REPAIR_SENTENCE
-                            and "strip-inline-readings" in w.badges
-                        )
+                        if not (w.field == "Sentence" and "strip-inline-readings" in w.badges)
+                        and w.op != OP_REGENERATE_FURIGANA
                     ]
-                    reasons[target.note_id] = "inline-reading-no-ruby"
+                    if non_inline_rules or not any(
+                        w.field == "Sentence" and w.default_checked for w in target_writes
+                    ):
+                        _append_local_sentence_writes(
+                            target,
+                            target_writes,
+                            non_inline_rules,
+                            reasons,
+                            warnings,
+                            morph_tokenizer=morph_tokenizer,
+                            batch_bold_inflected=bold_inflected,
+                            skip_bold=False,
+                        )
+                elif stripped_expansion and exp_write is not None:
+                    # Parent had inline readings that we stripped on expansion,
+                    # but ruby override failed: demote expansion and its paired
+                    # fills so the parent's inline reading isn't lost.
+                    target_writes = [
+                        w
+                        if w is not exp_write
+                        and not (
+                            w.field in {FURIGANA_FIELD, "Sentence Audio"}
+                            and w.source_note_id == exp_write.source_note_id
+                        )
+                        else replace(
+                            w,
+                            default_checked=False,
+                            badges=(*w.badges, "inline-reading-no-ruby"),
+                        )
+                        for w in target_writes
+                        if w.op != OP_REGENERATE_FURIGANA
+                    ]
+                else:
+                    target_writes = [w for w in target_writes if w.op != OP_REGENERATE_FURIGANA]
+                reasons[target.note_id] = "inline-reading-no-ruby"
+                if target_writes:
+                    expr_label = target.get("Expression") or "(sentence card)"
+                    warnings.append(
+                        f"note {target.note_id} ({expr_label}): inline reading kept"
+                        " — could not override furigana"
+                    )
+            else:
+                current_ruby = target.get(FURIGANA_FIELD) or ""
+                if new_ruby == current_ruby and fw.op == OP_REGENERATE_FURIGANA:
+                    target_writes = [w for w in target_writes if w is not fw]
+                else:
+                    added_badges = (
+                        (*fw.badges, "ruby-reading-overridden")
+                        if (new_ruby != fw.new_value or fw.op == OP_REGENERATE_FURIGANA)
+                        and "ruby-reading-overridden" not in fw.badges
+                        else fw.badges
+                    )
+                    target_writes = [
+                        (replace(w, new_value=new_ruby, badges=added_badges) if w is fw else w)
+                        for w in target_writes
+                    ]
 
         target_writes = _demote_completion_with_stale_ruby(target, target_writes)
         if (
@@ -2888,6 +3114,13 @@ def build_plan(
                 # covers the same field — otherwise the checked bold would
                 # silently swallow it (issue #17).
                 or (w.op == OP_EXPAND_SENTENCE and not w.default_checked)
+            ]
+        if target.note_id in neighbour_set and target_writes:
+            target_writes = [
+                replace(w, badges=(*w.badges, "scene-neighbour"))
+                if "scene-neighbour" not in w.badges
+                else w
+                for w in target_writes
             ]
         if not target_writes and target.note_id not in reasons:
             reasons[target.note_id] = "nothing-to-fill"

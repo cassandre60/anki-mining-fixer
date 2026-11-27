@@ -593,11 +593,48 @@ def _is_kana_payload(payload: str) -> bool:
 
 
 _INLINE_ANNOTATION_RE = re.compile(
-    r"([\u4e00-\u9fff\u3400-\u4dbf\u3005\u3006]+)(\s?)[\(（]([^)）]*)[\)）]"
+    # A kanji run, optionally followed by the deck's own bold markup — the
+    # subtitle bolds the word it annotates (``<b>槍</b>(やり)``) — then at most
+    # one whitespace, then the parentheses (ASCII or full-width).
+    r"([\u4e00-\u9fff\u3400-\u4dbf\u3005\u3006]+)"
+    r"((?:</?b>|<b\b[^>]*>)*)"
+    r"(\s?)[\(\uff08]([^)\uff09]*)[\)\uff09]"
 )
 
 
 def detect_inline_readings(sentence: str) -> tuple[str, list[dict]]:
+    """Split a Sentence into its cleaned text and its inline reading annotations.
+
+    Subtitle dumps annotate names and places with their show-specific reading
+    in parentheses (``本町(ほんちゅう)``: ほんちゅう here, ほんちょう in the
+    dictionary). The parenthetical is a reading aid, not spoken text, so it is
+    removed from the sentence and returned as an annotation for the ruby
+    override (issue #9).
+
+    A candidate is a **maximal kanji run** followed by a parenthetical:
+
+    - the parenthesis is *adjacent* — at most one whitespace character may sit
+      between the run and the paren, and the deck's own bold markup
+      (``<b>槍</b>(やり)``) is allowed and kept (the annotation wraps the word
+      the subtitle bolds); anything else — ``<br>``, punctuation, kana —
+      breaks adjacency and leaves the paren alone;
+    - the payload is kana only (hiragana, katakana, ``ー``, ``・``, iteration
+      marks), normalized with :func:`norm_reading` (NFKC, katakana →
+      hiragana); ``(笑)`` writes a kanji and is refused;
+    - the payload is **at least two kana** and no longer than three per kanji:
+      a one-kana aside (``(て)``) is refused as too short to be a reading, and
+      an over-long payload is refused as an aside rather than a reading;
+    - the run is **at least two kanji**: a one-kanji run followed by a short
+      kana pair is, in the configured deck, almost always a *fragment of a
+      longer name* (三浦 → ``浦(みうら)``, 都樹子 → ``子(つきこ)``) rather than
+      a reading of that single character, so it stays as mined.
+
+    Both ASCII ``()`` and Japanese ``（）`` pairs are accepted. Never touched:
+    speaker/stage tags at a line start (``(荒木)``), parentheticals after kana
+    or punctuation, ``(笑)``-style asides, and anything not immediately after
+    a kanji run. Ambiguous or malformed candidates are left in place — never
+    guessed. The transformation is idempotent. Pure.
+    """
     if not sentence:
         return sentence or "", []
 
@@ -606,14 +643,15 @@ def detect_inline_readings(sentence: str) -> tuple[str, list[dict]]:
     last = 0
     for match in _INLINE_ANNOTATION_RE.finditer(sentence):
         kanji = match.group(1)
-        payload_raw = match.group(3)
+        markup = match.group(2)
+        payload_raw = match.group(4)
         payload_norm = kana_fold(norm_reading(payload_raw))
         if not _is_kana_payload(payload_norm):
             continue
         if not _kana_payload_ok(payload_norm, len(kanji)):
             continue
         cleaned_parts.append(sentence[last : match.start()])
-        cleaned_parts.append(kanji)
+        cleaned_parts.append(kanji + markup)
         annotations.append({"base": kanji, "reading": payload_norm})
         last = match.end()
     cleaned_parts.append(sentence[last:])
@@ -685,12 +723,25 @@ def override_furigana_reading(
         reading = ann["reading"]
         occ = int(ann.get("occurrence", 1))
 
-        cur_base_text = "".join(s[0] for s in result_spans)
+        # Japanese Support inserts ASCII spaces before kanji tokens, splitting
+        # multi-kanji compounds (e.g. "炭[たん] 治郎[じろう]", "禰豆 子[こ]").
+        # Match against the space-collapsed base text while keeping a map back
+        # to (span_index, offset_in_span).
+        compact_chars: list[str] = []
+        char_map: list[tuple[int, int]] = []
+        for si, (span_base, _span_reading) in enumerate(result_spans):
+            for ci, ch in enumerate(span_base):
+                if ch == " ":
+                    continue
+                compact_chars.append(ch)
+                char_map.append((si, ci))
+        compact_text = "".join(compact_chars)
+
         start = -1
         pos = 0
         count = 0
         while True:
-            idx = cur_base_text.find(base, pos)
+            idx = compact_text.find(base, pos)
             if idx == -1:
                 break
             count += 1
@@ -702,31 +753,29 @@ def override_furigana_reading(
             return None
         end = start + len(base)
 
-        offsets: list[tuple[int, int]] = []
-        cur = 0
-        for sp in result_spans:
-            offsets.append((cur, cur + len(sp[0])))
-            cur += len(sp[0])
-
-        first = None
-        last = None
-        for idx, (a, b) in enumerate(offsets):
-            if first is None and (a == start or (a < start < b)):
-                first = idx
-            if a < end <= b:
-                last = idx
-                break
-        if first is None or last is None:
+        first_si, first_ci = char_map[start]
+        last_si, last_ci = char_map[end - 1]
+        # Never split inside an annotated ruby span (e.g. 本町通り[ほんちょうどおり]):
+        # splitting a single reading across partial kanji would require guessing.
+        if first_ci != 0 and result_spans[first_si][1] is not None:
             return None
-        if offsets[first][0] != start:
-            return None
-        if offsets[last][1] != end:
+        if last_ci != len(result_spans[last_si][0]) - 1 and result_spans[last_si][1] is not None:
             return None
 
-        merged_base = "".join(s[0] for s in result_spans[first : last + 1])
-        if merged_base != base:
-            return None
-        result_spans = result_spans[:first] + [(base, reading)] + result_spans[last + 1 :]
+        new_spans: list[tuple[str, str | None]] = list(result_spans[:first_si])
+        if first_ci > 0:
+            prefix = result_spans[first_si][0][:first_ci]
+            if prefix:
+                if not prefix.endswith((" ", ">")):
+                    prefix += " "
+                new_spans.append((prefix, None))
+        new_spans.append((base, reading))
+        if last_ci < len(result_spans[last_si][0]) - 1:
+            suffix = result_spans[last_si][0][last_ci + 1 :]
+            if suffix:
+                new_spans.append((suffix, None))
+        new_spans.extend(result_spans[last_si + 1 :])
+        result_spans = new_spans
 
     result = "".join((f"{b}[{r}]" if r is not None else b) for b, r in result_spans)
     if not furigana_base_matches(result, cleaned_sentence):

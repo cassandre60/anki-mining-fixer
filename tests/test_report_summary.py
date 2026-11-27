@@ -359,6 +359,11 @@ def test_all_known_badges_have_explanations():
         "join-speaker-lines",
         "strip-dash",
         "strip-nbsp",
+        "strip-inline-readings",
+        "ruby-reading-overridden",
+        # Scope propagation and clean-run tagging (B12, issue #20)
+        "scene-neighbour",
+        "card-finished-clean",
     ]
     for badge in known_static_badges:
         explanation = badge_explanation(badge)

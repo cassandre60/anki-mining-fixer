@@ -3085,3 +3085,201 @@ def test_bold_repair_refuses_ambiguous_multiple_inflections():
     plan = build_plan([target], CFG, scope_note_ids=[1], morph_tokenizer=mock_tok)
     assert not [w for w in plan.writes if w.note_id == 1 and w.field == "Sentence"]
     assert plan.reasons.get(1) == "cloze-word-ambiguous"
+
+
+# --- inline subtitle readings (issue #9, issue #20) ---------------------------
+
+_AKU_SENTENCE = "あそこの本町(ほんちゅう)通りの<b>十字路</b>"
+_AKU_RUBY = "あそこの 本町[ほんちょう] 通[とお]りの 十字路[じゅうじろ]"
+_INLINE_RULES = {**CFG, "sentence_repair_rules": ["strip-inline-readings"]}
+
+
+def _inline_card(nid=1, /, **overrides):
+    fields = {
+        "Expression": "十字路",
+        "reading": "じゅうじろ",
+        "furigana": "十字路[じゅうじろ]",
+        "cloze-body": "十字路",
+        "Sentence": _AKU_SENTENCE,
+        "Sentence (furigana)": _AKU_RUBY,
+        "Sentence Audio": "[sound:aku_scene.mp3]",
+        "Source": "[FFF] Aku no Hana - 04.mp4 (11m24s)",
+        # A real definition keeps the card out of the listening shape (its
+        # front would otherwise hide the sentence and skip the bold repair).
+        "Definition": "<ol><li>crossroads</li></ol>",
+    }
+    fields.update(overrides)
+    return rec(nid, fields, tags=("yomitan",))
+
+
+def test_an_inline_reading_is_stripped_and_its_reading_moved_to_the_ruby():
+    # Issue #9 acceptance: 本町(ほんちゅう) leaves the Sentence and its
+    # show-specific reading replaces the engine's ほんちょう in the ruby.
+    cfg = {**_INLINE_RULES, "batch_regenerate_furigana": True}
+    plan = build_plan(
+        [_inline_card()], cfg, scope_note_ids=[1], furigana_generator=lambda _s: _AKU_RUBY
+    )
+    sentences = [w for w in plan.writes if w.field == "Sentence"]
+    assert len(sentences) == 1
+    assert sentences[0].op == OP_REPAIR_SENTENCE
+    assert "strip-inline-readings" in sentences[0].badges
+    assert sentences[0].new_value == "あそこの本町通りの<b>十字路</b>"
+
+    rubies = [w for w in plan.writes if w.field == FURIGANA_FIELD]
+    assert len(rubies) == 1
+    assert "本町[ほんちゅう]" in rubies[0].new_value
+    assert "ruby-reading-overridden" in rubies[0].badges
+    assert furigana_base_matches(rubies[0].new_value, sentences[0].new_value)
+    # Every non-annotated span is byte-identical to the engine's output.
+    assert rubies[0].new_value.replace("本町[ほんちゅう]", "本町[ほんちょう]") == _AKU_RUBY
+
+    # Fixpoint (Q-A2): applying those two rows leaves nothing to do.
+    fixed = _inline_card(**{w.field: w.new_value for w in plan.writes})
+    again = build_plan([fixed], cfg, scope_note_ids=[1], furigana_generator=lambda _s: _AKU_RUBY)
+    assert again.writes == ()
+
+
+def test_an_inline_reading_without_a_reading_engine_is_left_alone():
+    # Atomicity (issue #9): the annotation is the only record of the
+    # show-specific reading, so the Sentence is not stripped when no ruby can
+    # carry it — no half-write, just a reason.
+    cfg = {**CFG, "sentence_repair_rules": ["strip-inline-readings"]}
+    plan = build_plan([_inline_card()], cfg, scope_note_ids=[1])
+    assert not [w for w in plan.writes if w.field in ("Sentence", FURIGANA_FIELD)]
+    assert plan.reasons[1] == "inline-reading-no-ruby"
+
+
+def test_bold_and_inline_strip_share_one_sentence_write():
+    # The bold write owns the Sentence, so the annotation must go in that same
+    # write; two competing Sentence rows would drop one of the two fixes.
+    sentence = "あそこの本町(ほんちゅう)通りの十字路"
+    card = _inline_card(Sentence=sentence, **{"Sentence (furigana)": ""})
+    cfg = {**_INLINE_RULES, "batch_regenerate_furigana": True}
+    plan = build_plan([card], cfg, scope_note_ids=[1], furigana_generator=lambda _s: _AKU_RUBY)
+    sentences = [w for w in plan.writes if w.field == "Sentence"]
+    assert len(sentences) == 1
+    assert sentences[0].op == OP_BOLD_CLOZE_WORD
+    assert "<b>十字路</b>" in sentences[0].new_value
+    assert "(ほんちゅう)" not in sentences[0].new_value
+    assert "strip-inline-readings" in sentences[0].badges
+    assert any(
+        "本町[ほんちゅう]" in w.new_value
+        for w in plan.writes
+        if w.field == FURIGANA_FIELD and w.default_checked
+    )
+
+
+def test_a_scene_expansion_strips_and_overrides_the_parents_inline_reading():
+    # The child was mined from a fragment; the parent's block carries the
+    # annotation. The expansion must clean the copied text *and* keep the
+    # show-specific reading, in the same run (Q-D16, issue #9 risk 5/6).
+    parent = rec(
+        2,
+        {
+            "Expression": "十字路",
+            "reading": "じゅうじろ",
+            "Sentence": "あそこの本町(ほんちゅう)通りの十字路だ",
+            "Sentence (furigana)": "",
+            "Sentence Audio": "[sound:aku_scene.mp3]",
+            "Source": "[FFF] Aku no Hana - 04.mp4 (11m24s)",
+            "cloze-body": "十字路",
+        },
+        tags=("asbplayer",),
+    )
+    child = rec(
+        1,
+        {
+            "Expression": "十字路",
+            "reading": "じゅうじろ",
+            "Sentence": "あそこの本町通り",
+            "Sentence (furigana)": "",
+            "Sentence Audio": "",
+            "Source": "blob:https://hianime.to/abc",
+            "cloze-body": "十字路",
+        },
+    )
+    cfg = {**_INLINE_RULES, "batch_regenerate_furigana": True}
+    engine = "あそこの 本町[ほんちょう] 通[とお]りの 十字路[じゅうじろ]だ"
+    plan = build_plan(
+        [child, parent], cfg, scope_note_ids=[1], furigana_generator=lambda _s: engine
+    )
+    expansion = next(w for w in plan.writes if w.note_id == 1 and w.field == "Sentence")
+    assert expansion.default_checked
+    assert "(ほんちゅう)" not in expansion.new_value
+    assert "expanded-strip-inline-readings" in expansion.badges
+    ruby = next(w for w in plan.writes if w.note_id == 1 and w.field == FURIGANA_FIELD)
+    assert "本町[ほんちゅう]" in ruby.new_value
+    assert "ruby-reading-overridden" in ruby.badges
+
+
+# --- scope propagation to the same subtitle line (B12, issue #20) -------------
+
+
+def _scene_card(nid, audio, sentence, tags=(), **overrides):
+    fields = {
+        "Expression": "十字路",
+        "reading": "じゅうじろ",
+        "Sentence": sentence,
+        "Sentence (furigana)": "",
+        "Sentence Audio": f" [sound:{audio}] " if audio else "",
+        "Source": "[FFF] Aku no Hana - 04.mp4 (11m24s)",
+        "cloze-body": "十字路",
+    }
+    fields.update(overrides)
+    return rec(nid, fields, tags=tags)
+
+
+def test_neighbour_expansion_adds_the_cards_sharing_the_scene_audio():
+    from mining_fixer.plan import expand_scope_with_neighbours
+
+    selected = _scene_card(1_000_000, "scene.mp3", "あそこの本町(ほんちゅう)通りの十字路")
+    sibling = _scene_card(1_000_050, "scene.mp3", "あそこの本町(ほんちゅう)通りの<b>十字路</b>")
+    other_scene = _scene_card(1_000_100, "other.mp3", "まったく別の場面の台詞です")
+    scope = expand_scope_with_neighbours([selected, sibling, other_scene], CFG, [1_000_000])
+    assert scope == [1_000_000, 1_000_050]
+
+
+def test_neighbour_expansion_adds_a_fragment_child_and_its_parent():
+    from mining_fixer.plan import expand_scope_with_neighbours
+
+    parent = _scene_card(2_000_000, "scene.mp3", "あそこの本町通りの十字路のとこ")
+    fragment = _scene_card(2_000_060, "", "あそこの本町通り")
+    unrelated = _scene_card(2_000_120, "", "まったく別の場面の断片")
+    # Selecting the enriched card pulls its fragment; selecting the fragment
+    # pulls its scene parent (so one card from a scene fixes the line).
+    assert expand_scope_with_neighbours([parent, fragment, unrelated], CFG, [2_000_000]) == [
+        2_000_000,
+        2_000_060,
+    ]
+    assert expand_scope_with_neighbours([parent, fragment, unrelated], CFG, [2_000_060]) == [
+        2_000_060,
+        2_000_000,
+    ]
+
+
+def test_neighbour_expansion_respects_optout_and_the_time_window():
+    from mining_fixer.plan import expand_scope_with_neighbours
+
+    selected = _scene_card(3_000_000, "scene.mp3", "あそこの本町通りの十字路")
+    opted_out = _scene_card(
+        3_000_050, "scene.mp3", "あそこの本町通りの十字路", tags=("no-autofill",)
+    )
+    far_away = _scene_card(3_000_000 + 40 * 86_400_000, "scene.mp3", "あそこの本町通りの十字路")
+    scope = expand_scope_with_neighbours([selected, opted_out, far_away], CFG, [3_000_000])
+    assert scope == [3_000_000]
+
+
+def test_propagated_rows_carry_the_scene_neighbour_badge():
+    selected = _scene_card(1_000_000, "scene.mp3", "あそこの本町(ほんちゅう)通りの十字路➡")
+    sibling = _scene_card(1_000_050, "scene.mp3", "あそこの本町(ほんちゅう)通りの十字路のとこ➡")
+    cfg = {**CFG, "sentence_repair_rules": ["strip-arrows"]}
+    plan = build_plan(
+        [selected, sibling],
+        cfg,
+        scope_note_ids=[1_000_000, 1_000_050],
+        neighbour_note_ids=[1_000_050],
+    )
+    neighbour_rows = [w for w in plan.writes if w.note_id == 1_000_050]
+    assert neighbour_rows
+    assert all("scene-neighbour" in w.badges for w in neighbour_rows)
+    assert all("scene-neighbour" not in w.badges for w in plan.writes if w.note_id == 1_000_000)

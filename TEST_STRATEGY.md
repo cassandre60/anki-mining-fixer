@@ -205,6 +205,39 @@ not have and must never be given.
   for `call_after_note_saved`, a doubled editor callback writes once, a lost
   callback is covered by the scheduler safety net, and a raising or missing
   editor still lets the run through.
+- **Inline show-specific readings** (issue #9, issue #20) are pinned in
+  `tests/test_normalize.py` (`detect_inline_readings` strips the annotation
+  and keeps the deck's `<b>` markup, accepts ASCII and full-width parens,
+  refuses a one-kanji run and `(笑)`-style asides, is idempotent;
+  `override_furigana_reading` merges an engine span the MeCab spacing split
+  (`炭[たん] 治郎[じろう]` → `炭治郎[たんじろう]`) with every other span
+  byte-identical, refuses to cut inside one engine reading
+  (`本町通り[ほんちょうどおり]`), and validates the base text) and
+  `tests/test_plan.py`
+  (`test_an_inline_reading_is_stripped_and_its_reading_moved_to_the_ruby` —
+  the issue #9 acceptance card, `本町[ほんちゅう]` not `[ほんちょう]`, and a
+  second plan writes nothing; `test_bold_and_inline_strip_share_one_sentence_write`
+  — the strip rides in the bold's single `Sentence` write;
+  `test_a_scene_expansion_strips_and_overrides_the_parents_inline_reading` —
+  the parent's annotation is cleaned and its reading kept on the child;
+  `test_an_inline_reading_without_a_reading_engine_is_left_alone` — no
+  half-write, reason `inline-reading-no-ruby`). All of them fail on the
+  pre-fix planner except the two guards that pin unchanged behaviour
+  (full-width parens, the single-kanji refusal).
+- **Same-line scope propagation** (`fix_neighbours`, QUALITY Q-C12) is pinned
+  in `tests/test_plan.py`: `expand_scope_with_neighbours` adds the cards
+  sharing the scene's `Sentence Audio`, a contained fragment and a fragment's
+  scene parent (in both directions), and excludes an `optout_tag` neighbour
+  and a sibling outside `window_days`;
+  `test_propagated_rows_carry_the_scene_neighbour_badge` pins the badge on
+  every propagated row and its absence on the selected card. The scene key
+  ignores the annotation (`本町(ほんちゅう)` matches `本町`), which is what
+  lets an annotated parent be found at all.
+- **Clean-run tagging** (QUALITY Q-C11) is pinned in
+  `tests/test_apply_fixpoint.py`: `_notes_finished_clean` tags only notes
+  that ended with no residual row, no guarded row, no reason and nothing the
+  user declined; `_tag_finished_clean_notes` writes `add_tags` for exactly
+  those notes (one merged undo log).
 - **Batch policy** lives in `tests/test_batch.py`: the default tier is
   lossless, the text unit (sentence + ruby) is atomic, a text-safety guard
   drops only the sentence while the scene's audio/picture are still filled, a
@@ -289,8 +322,8 @@ expected counts are:
 
 | Environment | Result |
 |---|---|
-| Author's machine (`python3 -m pytest`, Anki present) | **312 passed** |
-| CI / a venv without Anki | **310 passed, 2 skipped** |
+| Author's machine (`python3 -m pytest`, Anki present) | **354 passed** |
+| CI / a venv without Anki | **352 passed, 2 skipped** |
 
 Both are green; the difference is exactly two self-skipping import checks
 (the dialog modules need a real `aqt`).

@@ -18,7 +18,10 @@ the collection never touched by anything the dialog did not show.
 | Scene completion (full sentence, furigana, audio, picture, timestamped source) | `matching.find_scene_parents`, `plan._scene_writes_for` | golden fixture, byte-exact |
 | Word backfill (`Pitch Accent`, `Frequency`, `Word Audio`, `furigana`, `reading`; definitions are never copied) | `matching.word_groups`, `plan._word_writes_for` | unit tests + real-collection run |
 | Bold repair when `Sentence` has no bold term (cloze-body → Expression verbatim → surface form; clause-like Expressions refused, listening cards skipped) | `plan._bold_repair_for`, `plan._expression_is_word_like`, `plan._is_listening` | 鬱病 verified end to end; 2026-11-16 census classified 2,136 no-bold cards |
-| Subtitle-noise repair (`flatten-div-blocks`, `strip-arrows`, `join-speaker-lines`; `<br>`/padding kept as mined) — on by default | `normalize.repair_sentence`, `plan._sentence_repair_write`, `batch.py` tier | `tests/test_normalize.py`, `test_plan.py`, `test_batch.py` |
+| Subtitle-noise repair (`flatten-div-blocks`, `strip-arrows`, `join-speaker-lines`, `strip-inline-readings`; `<br>`/padding kept as mined) — on by default | `normalize.repair_sentence`, `plan._sentence_repair_write`, `batch.py` tier | `tests/test_normalize.py`, `test_plan.py`, `test_batch.py` |
+| Inline show-specific readings (`本町(ほんちゅう)`) stripped from `Sentence` and moved into the ruby as `本町[ほんちゅう]` — one atomic operation, on by default | `normalize.detect_inline_readings`, `normalize.override_furigana_reading`, `plan.build_plan` | `tests/test_normalize.py`, `test_plan.py`; 309/315 real inline-reading cards in the configured deck |
+| Scope propagation to the same subtitle line (shared `Sentence Audio`, contained fragments and a fragment's scene parent), checkbox on by default | `plan.expand_scope_with_neighbours`, `collection_io.plan_preview`, `preview_dialog.py`, `batch_dialog.py` | `tests/test_plan.py` (`test_neighbour_expansion_*`), `test_batch.py`; Ring 3 pending |
+| Clean-run tagging: `auto-filled` only on cards that finish an Apply with nothing left to do | `collection_io._tag_finished_clean_notes` | `tests/test_apply_fixpoint.py` |
 | Furigana regeneration through Japanese Support — on by default | `normalize.furigana_base_matches`, `plan._furigana_write_for`, `collection_io.japanese_support_furigana_generator`, `batch.py` tier | `tests/test_normalize.py`, `test_plan.py`, `test_batch.py`; Ring 3 battery pending |
 | Expression spelling repair from the note's own furigana (ひと握り → 一握り) — on by default | `normalize.furigana_base`, `plan._expression_repair_for`, `batch.py` tier | `tests/test_normalize.py`, `test_plan.py`, `test_batch.py`; real card 1736973220751; Ring 3 pending |
 | Empty-definition cleanup (clears only a definition that renders as nothing) | `normalize.is_empty_glossary_shell`, `plan._empty_glossary_writes` | `tests/test_normalize.py`, `test_plan.py`; on by default |
@@ -29,6 +32,7 @@ the collection never touched by anything the dialog did not show.
 | Apply with per-note re-assertion and no-op re-runs | `applier.decide` | `tests/test_applier.py` (13 tests) |
 | Undo of the last run | `applier.decide_undo`, `__init__._on_undo` | real-collection run |
 | Browser selection as the target scope | `plan.scope_from_selection`, `collection_io.plan_preview`, `__init__._on_browser_context_menu` | `test_scope_from_selection_*`, `test_browser_context_menu_*`, selection run on a real copy |
+| Same-line scope propagation (`fix_neighbours`): selecting one card fixes the rest of its subtitle line | `plan.expand_scope_with_neighbours` | `test_neighbour_expansion_*`, `test_propagated_rows_carry_the_scene_neighbour_badge` |
 | Source confidence: divergent or far scene sources never auto-checked | `plan._scene_writes_for` (`divergent-parents`, `far-from-source`) | `test_divergent_scene_sources_*`, `test_a_far_scene_source_*`, `test_an_identical_sentence_*` |
 | Batch mode: lossless-by-default policy, text-unit atomicity, source-confidence blocking, no decision queue, log-before-write, chunked apply, post-write verification, dry run | `batch.py`, `collection_io.apply_batch`, `batch_dialog.py` | `tests/test_batch.py`, `tests/test_invariants.py`, 1000-note run on a real copy |
 | Audit `.apkg` builder (dry runs) | `scripts/build_audit_package.py` | rebuilt package verified to the note |
@@ -65,7 +69,7 @@ the collection never touched by anything the dialog did not show.
 ## Acceptance criteria (every release)
 
 - `ruff check .` and `ruff format --check .` clean; `python3 -m pytest` green
-  (264 tests with Anki installed).
+  (354 tests with Anki installed).
 - CI (`tests` workflow) green on the released commit.
 - The golden fixture test still reproduces the author's manual fix
   byte-for-byte on all five fields.

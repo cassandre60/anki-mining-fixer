@@ -118,7 +118,14 @@ _BADGE_EXPLANATIONS: dict[str, str] = {
     "strip-dash": "Stray horizontal bars stripped from the Sentence field",
     "strip-nbsp": "Non-breaking spaces (&nbsp;) stripped",
     "strip-inline-readings": "Inline reading annotations stripped from the Sentence",
+    "expanded-strip-inline-readings": (
+        "Inline reading annotations in the copied scene sentence were stripped"
+    ),
     "ruby-reading-overridden": "Generated ruby reading overridden by an inline annotation",
+    # Scope propagation (B12)
+    "scene-neighbour": "Fixed because it was mined from the same subtitle line as a selected card",
+    # Clean-run tagging (B12)
+    "card-finished-clean": "The card has nothing left to fix — the run is finished with it",
 }
 
 
