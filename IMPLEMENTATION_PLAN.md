@@ -405,6 +405,19 @@ below, never as silent scope creep inside a coding session.
     `tests/test_apply_fixpoint.py` and the badge-coverage list in
     `tests/test_report_summary.py`; every new test was run against the
     pre-fix tree and fails there.
+  - **Toggle performance follow-up.** Ticking the checkbox re-planned through
+    a full deck read and rebuilt the dialog body, discarding manual row
+    choices. Both dialogs now re-plan with the records captured at open
+    (`plan_preview(records=...)`), update the preview table in place, keep
+    user check/uncheck overrides keyed by `(note_id, field)`, debounce rapid
+    toggles (150 ms) and show a wait cursor. `expand_scope_with_neighbours`
+    caches each note's parsed scene audio instead of re-parsing it per
+    (selected, candidate) pair. Measured on a synthetic 17 k-note deck
+    (pure planner, no Anki): 100-target re-plan 900 ms → 322 ms cold,
+    771 ms → 252 ms with cached records; 30 targets 475 ms → 251 ms cold,
+    355 ms → 171 ms cached; the remaining single-target ~140 ms is
+    `build_plan`'s word index. Pinned by the existing neighbour-expansion
+    tests and `tests/test_apply_fixpoint.py`'s in-memory re-plan test.
 
 ## Backlog
 

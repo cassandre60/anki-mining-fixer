@@ -2400,6 +2400,7 @@ def expand_scope_with_neighbours(
     sorted_ids = [r.note_id for r in sorted_records]
 
     norm_cache: dict[int, str] = {}
+    audio_cache: dict[int, frozenset[str]] = {}
 
     def line_key(record: NoteRecord) -> str:
         cached = norm_cache.get(record.note_id)
@@ -2411,11 +2412,19 @@ def expand_scope_with_neighbours(
         norm_cache[record.note_id] = key
         return key
 
-    def scene_audio_files(record: NoteRecord) -> tuple[str, ...]:
+    def scene_audio_files(record: NoteRecord) -> frozenset[str]:
+        # Records are immutable snapshots, so the regex parse is computed once
+        # per note instead of once per (selected, candidate) pair.
+        cached = audio_cache.get(record.note_id)
+        if cached is not None:
+            return cached
         val = record.get("Sentence Audio")
         if is_empty(val) or is_word_media(val) or is_word_media(record.get("Picture")):
-            return ()
-        return tuple(sound_files(val))
+            result: frozenset[str] = frozenset()
+        else:
+            result = frozenset(sound_files(val))
+        audio_cache[record.note_id] = result
+        return result
 
     seen = set(base_scope)
     added: set[int] = set()
@@ -2432,14 +2441,14 @@ def expand_scope_with_neighbours(
         hi = bisect.bisect_right(sorted_ids, sid + window_ms)
         window_recs = sorted_records[lo:hi]
 
-        sel_audio = set(scene_audio_files(sel))
+        sel_audio = scene_audio_files(sel)
         sel_key = line_key(sel)
 
         if sel_audio:
             for r in window_recs:
                 if r.note_id == sid:
                     continue
-                r_audio = set(scene_audio_files(r))
+                r_audio = scene_audio_files(r)
                 if sel_audio & r_audio or (
                     is_empty(r.get("Sentence Audio"))
                     and len(sel_key) >= min_len
@@ -2455,7 +2464,7 @@ def expand_scope_with_neighbours(
             for r in window_recs:
                 if r.note_id == sid:
                     continue
-                r_audio = set(scene_audio_files(r))
+                r_audio = scene_audio_files(r)
                 r_key = line_key(r)
                 if r_audio:
                     if len(r_key) >= min_len and sel_key in r_key:
@@ -2468,7 +2477,7 @@ def expand_scope_with_neighbours(
                 for r in window_recs:
                     if r.note_id == sid:
                         continue
-                    r_audio = set(scene_audio_files(r))
+                    r_audio = scene_audio_files(r)
                     if r_audio & parent_audio:
                         consider(r)
                     elif is_empty(r.get("Sentence Audio")):

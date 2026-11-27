@@ -527,6 +527,12 @@ first, with the reason.
   4. **Cached media existence lookups:** Media checks must query the media
      directory path once and cache file existence in memory, avoiding redundant
      Rust FFI and filesystem `stat` bursts.
+  5. **Interactive re-plan reuses the open dialog's snapshot:** Toggling the
+     neighbour checkbox must not re-query the deck (`plan_preview(records=...)`
+     with the records captured at open), must not tear down and rebuild the
+     dialog body (the table is repopulated in place), and must not discard the
+     user's manual row check/uncheck state (keyed by `(note_id, field)` and
+     re-applied to the new plan). A short debounce coalesces rapid toggles.
 
 ## System
 

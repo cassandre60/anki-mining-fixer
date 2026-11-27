@@ -183,7 +183,10 @@ installed; for a manual install, copy any installed add-on's and set
   same subtitle line** as the selection — they share the scene's `Sentence
   Audio`, so one card from a scene fixes the line (the header says how many
   were added, and every one of their rows is badged `scene-neighbour`).
-  `fix_neighbours` in the config is the default for that checkbox.
+  `fix_neighbours` in the config is the default for that checkbox. Toggling
+  the checkbox re-plans from the snapshot taken when the dialog opened
+  (no deck re-read, no dialog rebuild); rows you ticked or unticked by hand
+  keep your choice.
 
 Either entry opens the same dialog: every proposed write is one row (note,
 field, the exact old → new value, its source note, its badges). Rows the plan
